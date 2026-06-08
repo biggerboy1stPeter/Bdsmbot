@@ -11,6 +11,7 @@ class BaseConfigView(discord.ui.View):
         super().__init__(timeout=timeout)
         self.bot = bot
         self.guild_id = guild_id
+        self.message = None  # to be set after sending
 
     async def get_setting(self, key, default=None):
         async with self.bot.db_pool.acquire() as conn:
@@ -29,10 +30,14 @@ class BaseConfigView(discord.ui.View):
             )
 
     async def on_timeout(self):
-        """Disable all items when the view times out."""
+        """Disable all items and update the original message when the view times out."""
         for child in self.children:
             child.disabled = True
-        # Note: To edit the original message, you would need to store self.message.
+        if self.message:
+            try:
+                await self.message.edit(content="⏰ Admin panel timed out. Use `/admin` again.", view=None)
+            except:
+                pass
 
 # ------------------- Cog -------------------
 class AdminPanel(commands.Cog):
@@ -50,6 +55,8 @@ class AdminPanel(commands.Cog):
             color=0xdc2626
         )
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
+        # Store the message so the view can edit it on timeout
+        view.message = await interaction.original_response()
 
 async def setup(bot):
     await bot.add_cog(AdminPanel(bot))
@@ -63,22 +70,26 @@ class MainMenu(BaseConfigView):
     async def mod_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         view = ModerationMenu(self.bot, self.guild_id)
         await interaction.response.edit_message(content="**Moderation Settings**", view=view)
+        view.message = await interaction.original_response()
 
     @discord.ui.button(label="Auto-Post", style=discord.ButtonStyle.blurple, emoji="📅")
     async def auto_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         view = AutoPostMenu(self.bot, self.guild_id)
         await interaction.response.edit_message(content="**Auto-Post Settings**", view=view)
+        view.message = await interaction.original_response()
 
     @discord.ui.button(label="Server Config", style=discord.ButtonStyle.green, emoji="⚙️")
     async def config_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         view = ServerConfigMenu(self.bot, self.guild_id)
         await interaction.response.edit_message(content="**Server Configuration**", view=view)
+        view.message = await interaction.original_response()
 
     @discord.ui.button(label="View Warnings", style=discord.ButtonStyle.gray, emoji="📋")
     async def warnings_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         async with self.bot.db_pool.acquire() as conn:
             rows = await conn.fetch(
-                "SELECT user_id, reason, timestamp FROM warnings ORDER BY timestamp DESC LIMIT 10"
+                "SELECT user_id, reason, timestamp FROM warnings WHERE guild_id = $1 ORDER BY timestamp DESC LIMIT 10",
+                interaction.guild_id
             )
             if not rows:
                 await interaction.response.send_message("No warnings found.", ephemeral=True)
@@ -90,7 +101,7 @@ class MainMenu(BaseConfigView):
 
     @discord.ui.button(label="Create Embed Post", style=discord.ButtonStyle.grey, emoji="📝")
     async def embed_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = EmbedModal(self.bot, interaction.guild_id, parent_view=self)  # passes parent
+        modal = EmbedModal(self.bot, interaction.guild_id, parent_view=self)
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Close", style=discord.ButtonStyle.danger, row=2)
@@ -122,11 +133,13 @@ class ModerationMenu(BaseConfigView):
         await interaction.response.edit_message(
             content=f"Link filter **{'enabled' if new=='true' else 'disabled'}**.", view=self
         )
+        self.message = await interaction.original_response()
 
     @discord.ui.button(label="Back", style=discord.ButtonStyle.danger)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
         view = MainMenu(self.bot, self.guild_id)
         await interaction.response.edit_message(content="**Admin Panel**", view=view)
+        view.message = await interaction.original_response()
 
 # ------------------- Auto-Post Menu -------------------
 class AutoPostMenu(BaseConfigView):
@@ -137,11 +150,13 @@ class AutoPostMenu(BaseConfigView):
     async def tips_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
         view = ChannelSelectView(self.bot, self.guild_id, "tips_channel", parent_menu=self)
         await interaction.response.edit_message(content="Select a channel for daily tips:", view=view)
+        view.message = await interaction.original_response()
 
     @discord.ui.button(label="Set Scenes Channel", style=discord.ButtonStyle.success, emoji="#️⃣")
     async def scenes_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
         view = ChannelSelectView(self.bot, self.guild_id, "scenes_channel", parent_menu=self)
         await interaction.response.edit_message(content="Select a channel for weekly scene ideas:", view=view)
+        view.message = await interaction.original_response()
 
     @discord.ui.button(label="Toggle Daily Tip", style=discord.ButtonStyle.primary, emoji="✅")
     async def toggle_daily(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -153,11 +168,13 @@ class AutoPostMenu(BaseConfigView):
         await interaction.response.edit_message(
             content=f"Daily tip {'enabled ✅' if new=='true' else 'disabled ❌'}.", view=self
         )
+        self.message = await interaction.original_response()
 
     @discord.ui.button(label="Back", style=discord.ButtonStyle.danger)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
         view = MainMenu(self.bot, self.guild_id)
         await interaction.response.edit_message(content="**Admin Panel**", view=view)
+        view.message = await interaction.original_response()
 
 # ------------------- Server Config Menu -------------------
 class ServerConfigMenu(BaseConfigView):
@@ -168,21 +185,31 @@ class ServerConfigMenu(BaseConfigView):
     async def mod_role(self, interaction: discord.Interaction, button: discord.ui.Button):
         view = RoleSelectView(self.bot, self.guild_id, "mod_role_id", parent_menu=self)
         await interaction.response.edit_message(content="Select the moderator role:", view=view)
+        view.message = await interaction.original_response()
 
     @discord.ui.button(label="Set Admin Role", style=discord.ButtonStyle.success, emoji="👑")
     async def admin_role(self, interaction: discord.Interaction, button: discord.ui.Button):
         view = RoleSelectView(self.bot, self.guild_id, "admin_role_id", parent_menu=self)
         await interaction.response.edit_message(content="Select the admin role:", view=view)
+        view.message = await interaction.original_response()
+
+    @discord.ui.button(label="Trusted Role", style=discord.ButtonStyle.success, emoji="⭐")
+    async def trusted_role(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = RoleSelectView(self.bot, self.guild_id, "trusted_role_id", parent_menu=self)
+        await interaction.response.edit_message(content="Select the trusted role (bypasses link filter):", view=view)
+        view.message = await interaction.original_response()
 
     @discord.ui.button(label="Logging Channel", style=discord.ButtonStyle.success, emoji="#️⃣")
     async def log_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
         view = ChannelSelectView(self.bot, self.guild_id, "log_channel", parent_menu=self)
         await interaction.response.edit_message(content="Select a channel for moderation logs:", view=view)
+        view.message = await interaction.original_response()
 
     @discord.ui.button(label="Back", style=discord.ButtonStyle.danger)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
         view = MainMenu(self.bot, self.guild_id)
         await interaction.response.edit_message(content="**Admin Panel**", view=view)
+        view.message = await interaction.original_response()
 
 # ------------------- Channel Select (with Back button) -------------------
 class ChannelSelectView(BaseConfigView):
@@ -209,11 +236,14 @@ class ChannelSelectView(BaseConfigView):
         msg = f"✅ Channel set to <#{channel_id}>"
         view = self.parent_menu if self.parent_menu else None
         await interaction.response.edit_message(content=msg, view=view)
+        if view:
+            view.message = await interaction.original_response()
 
     @discord.ui.button(label="Back", style=discord.ButtonStyle.danger)
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.parent_menu:
             await interaction.response.edit_message(view=self.parent_menu)
+            self.parent_menu.message = await interaction.original_response()
         else:
             await interaction.response.edit_message(content="Cancelled.", view=None)
 
@@ -242,11 +272,14 @@ class RoleSelectView(BaseConfigView):
         msg = f"✅ Role set to <@&{role_id}>"
         view = self.parent_menu if self.parent_menu else None
         await interaction.response.edit_message(content=msg, view=view)
+        if view:
+            view.message = await interaction.original_response()
 
     @discord.ui.button(label="Back", style=discord.ButtonStyle.danger)
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         if self.parent_menu:
             await interaction.response.edit_message(view=self.parent_menu)
+            self.parent_menu.message = await interaction.original_response()
         else:
             await interaction.response.edit_message(content="Cancelled.", view=None)
 
@@ -277,6 +310,8 @@ class SetValueModal(discord.ui.Modal, title="Set Value"):
         msg = f"✅ Updated {self.key} to {value}"
         view = self.parent_view if self.parent_view else None
         await interaction.response.edit_message(content=msg, view=view)
+        if view:
+            view.message = await interaction.original_response()
 
 class AddWordModal(discord.ui.Modal, title="Add Profanity Word"):
     def __init__(self, bot, guild_id, parent_view=None):
@@ -311,13 +346,15 @@ class AddWordModal(discord.ui.Modal, title="Add Profanity Word"):
         msg = f"✅ Added profanity word: **{word}**"
         view = self.parent_view if self.parent_view else None
         await interaction.response.edit_message(content=msg, view=view)
+        if view:
+            view.message = await interaction.original_response()
 
 class EmbedModal(discord.ui.Modal, title="Create Embed Post"):
     def __init__(self, bot, guild_id, parent_view=None):
         super().__init__()
         self.bot = bot
         self.guild_id = guild_id
-        self.parent_view = parent_view  # to return to the previous menu
+        self.parent_view = parent_view
         self.add_item(discord.ui.TextInput(label="Channel ID", placeholder="Enter the channel ID number"))
         self.add_item(discord.ui.TextInput(label="Title"))
         self.add_item(discord.ui.TextInput(label="Description", style=discord.TextStyle.long))
@@ -344,7 +381,7 @@ class EmbedModal(discord.ui.Modal, title="Create Embed Post"):
             await interaction.response.send_message("❌ Title and description cannot be empty.", ephemeral=True)
             return
 
-        # ---- Color validation (safe) ----
+        # ---- Color validation ----
         color_raw = self.children[3].value or "#dc2626"
         color_clean = color_raw.lstrip('#')
         if not re.match(r'^[0-9a-fA-F]{6}$', color_clean):
@@ -359,7 +396,6 @@ class EmbedModal(discord.ui.Modal, title="Create Embed Post"):
             if not re.match(r'^[\w\-\.]+$', image):
                 await interaction.response.send_message("❌ Invalid image filename. Use only letters, numbers, dots, hyphens, underscores.", ephemeral=True)
                 return
-            # Use the same path logic as your /postembed command
             image_path = os.path.join(os.path.dirname(__file__), '..', 'images', image)
             if not os.path.exists(image_path):
                 await interaction.response.send_message(f"❌ Image file not found: {image}", ephemeral=True)
@@ -382,8 +418,9 @@ class EmbedModal(discord.ui.Modal, title="Create Embed Post"):
             await interaction.response.send_message(f"❌ Failed to send embed: {e}", ephemeral=True)
             return
 
-        # ---- Success – return to the admin panel (if parent_view exists) ----
+        # ---- Success – return to parent view ----
         if self.parent_view:
             await interaction.response.edit_message(content=f"✅ Embed posted in {channel.mention}", view=self.parent_view)
+            self.parent_view.message = await interaction.original_response()
         else:
             await interaction.response.send_message(f"✅ Embed posted in {channel.mention}", ephemeral=True)
