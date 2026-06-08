@@ -1,4 +1,5 @@
 import os
+import re
 import discord
 from discord import app_commands
 from discord.ext import commands
@@ -31,13 +32,7 @@ class BaseConfigView(discord.ui.View):
         """Disable all items when the view times out."""
         for child in self.children:
             child.disabled = True
-        # To edit the original message you must store it when sending the view.
-        # We don't have self.message, so this is a no‑op. You can implement
-        # message capturing if needed.
-        # try:
-        #     await self.message.edit(view=self)
-        # except:
-        #     pass
+        # Note: To edit the original message, you would need to store self.message.
 
 # ------------------- Cog -------------------
 class AdminPanel(commands.Cog):
@@ -95,7 +90,7 @@ class MainMenu(BaseConfigView):
 
     @discord.ui.button(label="Create Embed Post", style=discord.ButtonStyle.grey, emoji="📝")
     async def embed_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = EmbedModal(self.bot, interaction.guild_id)
+        modal = EmbedModal(self.bot, interaction.guild_id, parent_view=self)  # passes parent
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Close", style=discord.ButtonStyle.danger, row=2)
@@ -318,49 +313,77 @@ class AddWordModal(discord.ui.Modal, title="Add Profanity Word"):
         await interaction.response.edit_message(content=msg, view=view)
 
 class EmbedModal(discord.ui.Modal, title="Create Embed Post"):
-    def __init__(self, bot, guild_id):
+    def __init__(self, bot, guild_id, parent_view=None):
         super().__init__()
         self.bot = bot
         self.guild_id = guild_id
-        self.add_item(discord.ui.TextInput(label="Channel ID"))
+        self.parent_view = parent_view  # to return to the previous menu
+        self.add_item(discord.ui.TextInput(label="Channel ID", placeholder="Enter the channel ID number"))
         self.add_item(discord.ui.TextInput(label="Title"))
         self.add_item(discord.ui.TextInput(label="Description", style=discord.TextStyle.long))
-        self.add_item(discord.ui.TextInput(label="Color (hex)", placeholder="#dc2626", required=False))
-        self.add_item(discord.ui.TextInput(label="Image filename (optional)", placeholder="announce.png", required=False))
+        self.add_item(discord.ui.TextInput(label="Color (hex)", placeholder="#dc2626 or dc2626", required=False))
+        self.add_item(discord.ui.TextInput(label="Image filename", placeholder="announce.png (optional)", required=False))
 
     async def on_submit(self, interaction: discord.Interaction):
+        # ---- Channel validation ----
         try:
-            channel_id = int(self.children[0].value)
+            channel_id = int(self.children[0].value.strip())
         except ValueError:
-            await interaction.response.send_message("❌ Invalid channel ID.", ephemeral=True)
-            return
-        title = self.children[1].value
-        desc = self.children[2].value
-        color_hex = self.children[3].value or "#dc2626"
-        image_file = self.children[4].value or None
-
-        try:
-            color = int(color_hex.lstrip('#'), 16)
-        except ValueError:
-            await interaction.response.send_message("❌ Invalid color hex.", ephemeral=True)
+            await interaction.response.send_message("❌ Invalid Channel ID. Must be a number.", ephemeral=True)
             return
 
         channel = interaction.guild.get_channel(channel_id)
-        if not channel:
-            await interaction.response.send_message("❌ Channel not found.", ephemeral=True)
+        if not channel or not isinstance(channel, discord.TextChannel):
+            await interaction.response.send_message("❌ Channel not found or not a text channel.", ephemeral=True)
             return
 
-        embed = discord.Embed(title=title, description=desc, color=color)
-        embed.set_footer(text="BDSM Collective • Official Post")
-        file = None
-        if image_file:
-            image_path = os.path.join(os.path.dirname(__file__), '..', 'images', image_file)
-            if os.path.exists(image_path):
-                file = discord.File(image_path, filename=image_file)
-                embed.set_image(url=f"attachment://{image_file}")
-            else:
-                await interaction.response.send_message(f"❌ Image file not found: {image_file}", ephemeral=True)
-                return
+        # ---- Basic fields ----
+        title = self.children[1].value.strip()
+        description = self.children[2].value.strip()
+        if not title or not description:
+            await interaction.response.send_message("❌ Title and description cannot be empty.", ephemeral=True)
+            return
 
-        await channel.send(embed=embed, file=file)
-        await interaction.response.send_message(f"✅ Embed posted in {channel.mention}", ephemeral=True)
+        # ---- Color validation (safe) ----
+        color_raw = self.children[3].value or "#dc2626"
+        color_clean = color_raw.lstrip('#')
+        if not re.match(r'^[0-9a-fA-F]{6}$', color_clean):
+            await interaction.response.send_message("❌ Invalid color hex. Use format `#dc2626` or `dc2626`.", ephemeral=True)
+            return
+        color_int = int(color_clean, 16)
+
+        # ---- Image validation (path traversal protection) ----
+        image = self.children[4].value or None
+        file = None
+        if image:
+            if not re.match(r'^[\w\-\.]+$', image):
+                await interaction.response.send_message("❌ Invalid image filename. Use only letters, numbers, dots, hyphens, underscores.", ephemeral=True)
+                return
+            # Use the same path logic as your /postembed command
+            image_path = os.path.join(os.path.dirname(__file__), '..', 'images', image)
+            if not os.path.exists(image_path):
+                await interaction.response.send_message(f"❌ Image file not found: {image}", ephemeral=True)
+                return
+            file = discord.File(image_path, filename=image)
+
+        # ---- Build embed ----
+        embed = discord.Embed(title=title, description=description, color=color_int)
+        embed.set_footer(text="BDSM Collective • Official Post")
+        if file:
+            embed.set_image(url=f"attachment://{image}")
+
+        # ---- Send with error handling ----
+        try:
+            await channel.send(embed=embed, file=file)
+        except discord.Forbidden:
+            await interaction.response.send_message(f"❌ Missing permissions to send messages in {channel.mention}.", ephemeral=True)
+            return
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Failed to send embed: {e}", ephemeral=True)
+            return
+
+        # ---- Success – return to the admin panel (if parent_view exists) ----
+        if self.parent_view:
+            await interaction.response.edit_message(content=f"✅ Embed posted in {channel.mention}", view=self.parent_view)
+        else:
+            await interaction.response.send_message(f"✅ Embed posted in {channel.mention}", ephemeral=True)
