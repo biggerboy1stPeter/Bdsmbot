@@ -12,8 +12,9 @@ class Basics(commands.Cog):
         await interaction.response.send_message(f"🏓 Pong! {round(self.bot.latency * 1000)}ms")
 
     @app_commands.command(name="safeword", description="Global safeword alert")
+    @app_commands.guild_only()
+    @app_commands.describe(reason="Optional reason for the safeword activation")
     async def safeword(self, interaction: discord.Interaction, reason: str = "No reason given"):
-        # Get moderator role from database config
         mod_role_id = None
         async with self.bot.db_pool.acquire() as conn:
             row = await conn.fetchrow(
@@ -21,8 +22,21 @@ class Basics(commands.Cog):
                 interaction.guild_id
             )
             if row:
-                mod_role_id = row['value']
-        mod_mention = f"<@&{mod_role_id}>" if mod_role_id else "Moderators"
+                try:
+                    mod_role_id = int(row['value'])
+                except (ValueError, TypeError):
+                    mod_role_id = None
+
+        # Resolve role object (optional – for validation)
+        role = None
+        if mod_role_id:
+            role = interaction.guild.get_role(mod_role_id)
+
+        if role:
+            mod_mention = role.mention
+        else:
+            mod_mention = "Moderators (no role configured)"
+
         await interaction.response.send_message(
             f"🚨 **SAFECALL ACTIVATED** by {interaction.user.mention}\n"
             f"Reason: {reason}\n\n"
