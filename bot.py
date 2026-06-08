@@ -65,15 +65,15 @@ class KinkBot(commands.Bot):
         keep_alive_port = int(os.getenv("KEEP_ALIVE_PORT", "8081"))
         asyncio.create_task(start_keep_alive(keep_alive_port))
 
-        # Load all cogs
+        # Load all cogs (adminpost REMOVED)
         cogs = [
             "cogs.basics",
             "cogs.profiles",
             "cogs.collars",
             "cogs.moderation",
             "cogs.autopost",
-            "cogs.adminpost",
-            "cogs.adminpanel",
+            # "cogs.adminpost",   # <-- DELETED – standalone /postembed command removed
+            "cogs.adminpanel",    # <-- this contains the modal inside the admin panel
             "cogs.orders",
             "cogs.serverinfo",
             "cogs.tasks",
