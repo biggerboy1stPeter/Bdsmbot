@@ -11,7 +11,7 @@ class BaseConfigView(discord.ui.View):
         super().__init__(timeout=timeout)
         self.bot = bot
         self.guild_id = guild_id
-        self.message = None  # to be set after sending
+        self.message = None
 
     async def get_setting(self, key, default=None):
         async with self.bot.db_pool.acquire() as conn:
@@ -30,7 +30,6 @@ class BaseConfigView(discord.ui.View):
             )
 
     async def on_timeout(self):
-        """Disable all items and update the original message when the view times out."""
         for child in self.children:
             child.disabled = True
         if self.message:
@@ -55,7 +54,6 @@ class AdminPanel(commands.Cog):
             color=0xdc2626
         )
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
-        # Store the message so the view can edit it on timeout
         view.message = await interaction.original_response()
 
 async def setup(bot):
@@ -211,14 +209,16 @@ class ServerConfigMenu(BaseConfigView):
         await interaction.response.edit_message(content="**Admin Panel**", view=view)
         view.message = await interaction.original_response()
 
-# ------------------- Channel Select (with Back button) -------------------
+# ------------------- Channel Select (with placeholder) -------------------
 class ChannelSelectView(BaseConfigView):
     def __init__(self, bot, guild_id, setting_key, parent_menu=None):
         super().__init__(bot, guild_id, timeout=120)
         self.setting_key = setting_key
         self.parent_menu = parent_menu
-        # Populate the select menu with channels
-        self.select_menu.options = self.get_channel_options()
+        options = self.get_channel_options()
+        if not options:
+            options = [discord.SelectOption(label="❌ No text channels found", value="0", default=True)]
+        self.select_menu.options = options
 
     def get_channel_options(self):
         guild = self.bot.get_guild(self.guild_id)
@@ -226,11 +226,17 @@ class ChannelSelectView(BaseConfigView):
             return []
         options = []
         for channel in guild.text_channels:
-            options.append(discord.SelectOption(label=channel.name, value=str(channel.id)))
+            # Optional: check if bot has read permission
+            perms = channel.permissions_for(guild.me)
+            if perms.read_messages and perms.send_messages:
+                options.append(discord.SelectOption(label=channel.name, value=str(channel.id)))
         return options[:25]
 
     @discord.ui.select(placeholder="Choose a channel...", min_values=1, max_values=1)
     async def select_menu(self, interaction: discord.Interaction, select: discord.ui.Select):
+        if select.values[0] == "0":
+            await interaction.response.send_message("❌ No text channels available. Make sure I have `View Channel` and `Send Messages` permissions.", ephemeral=True)
+            return
         channel_id = select.values[0]
         await self.set_setting(self.setting_key, channel_id)
         msg = f"✅ Channel set to <#{channel_id}>"
@@ -247,13 +253,16 @@ class ChannelSelectView(BaseConfigView):
         else:
             await interaction.response.edit_message(content="Cancelled.", view=None)
 
-# ------------------- Role Select (with Back button) -------------------
+# ------------------- Role Select (with placeholder) -------------------
 class RoleSelectView(BaseConfigView):
     def __init__(self, bot, guild_id, setting_key, parent_menu=None):
         super().__init__(bot, guild_id, timeout=120)
         self.setting_key = setting_key
         self.parent_menu = parent_menu
-        self.select_menu.options = self.get_role_options()
+        options = self.get_role_options()
+        if not options:
+            options = [discord.SelectOption(label="❌ No roles available", value="0", default=True)]
+        self.select_menu.options = options
 
     def get_role_options(self):
         guild = self.bot.get_guild(self.guild_id)
@@ -267,6 +276,9 @@ class RoleSelectView(BaseConfigView):
 
     @discord.ui.select(placeholder="Select a role...", min_values=1, max_values=1)
     async def select_menu(self, interaction: discord.Interaction, select: discord.ui.Select):
+        if select.values[0] == "0":
+            await interaction.response.send_message("❌ No roles available. Make sure I have `View Channel` permission.", ephemeral=True)
+            return
         role_id = select.values[0]
         await self.set_setting(self.setting_key, role_id)
         msg = f"✅ Role set to <@&{role_id}>"
@@ -362,7 +374,6 @@ class EmbedModal(discord.ui.Modal, title="Create Embed Post"):
         self.add_item(discord.ui.TextInput(label="Image filename", placeholder="announce.png (optional)", required=False))
 
     async def on_submit(self, interaction: discord.Interaction):
-        # ---- Channel validation ----
         try:
             channel_id = int(self.children[0].value.strip())
         except ValueError:
@@ -374,14 +385,12 @@ class EmbedModal(discord.ui.Modal, title="Create Embed Post"):
             await interaction.response.send_message("❌ Channel not found or not a text channel.", ephemeral=True)
             return
 
-        # ---- Basic fields ----
         title = self.children[1].value.strip()
         description = self.children[2].value.strip()
         if not title or not description:
             await interaction.response.send_message("❌ Title and description cannot be empty.", ephemeral=True)
             return
 
-        # ---- Color validation ----
         color_raw = self.children[3].value or "#dc2626"
         color_clean = color_raw.lstrip('#')
         if not re.match(r'^[0-9a-fA-F]{6}$', color_clean):
@@ -389,7 +398,6 @@ class EmbedModal(discord.ui.Modal, title="Create Embed Post"):
             return
         color_int = int(color_clean, 16)
 
-        # ---- Image validation (path traversal protection) ----
         image = self.children[4].value or None
         file = None
         if image:
@@ -402,13 +410,11 @@ class EmbedModal(discord.ui.Modal, title="Create Embed Post"):
                 return
             file = discord.File(image_path, filename=image)
 
-        # ---- Build embed ----
         embed = discord.Embed(title=title, description=description, color=color_int)
         embed.set_footer(text="BDSM Collective • Official Post")
         if file:
             embed.set_image(url=f"attachment://{image}")
 
-        # ---- Send with error handling ----
         try:
             await channel.send(embed=embed, file=file)
         except discord.Forbidden:
@@ -418,7 +424,6 @@ class EmbedModal(discord.ui.Modal, title="Create Embed Post"):
             await interaction.response.send_message(f"❌ Failed to send embed: {e}", ephemeral=True)
             return
 
-        # ---- Success – return to parent view ----
         if self.parent_view:
             await interaction.response.edit_message(content=f"✅ Embed posted in {channel.mention}", view=self.parent_view)
             self.parent_view.message = await interaction.original_response()
