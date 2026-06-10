@@ -1,16 +1,37 @@
+import os
+import re
 import json
+import random
 import asyncio
-from datetime import datetime, timedelta, time
+import logging
+import discord
+from discord.ext import commands, tasks
 
-# ──────────────────── New AutoPostMenu ────────────────────
+# Shared UI classes (must exist in cogs/base_view.py)
+from cogs.base_view import BaseConfigView, ChannelSelectView, RoleSelectView
+
+logger = logging.getLogger("kinkbot")
+
+# ------------------------------------------------------------------
+# Temporary MainMenu replacement to avoid circular import.
+# Replace this with the real MainMenu once you move it to base_view.py.
+# ------------------------------------------------------------------
+class MainMenu(BaseConfigView):
+    def __init__(self, bot, guild_id):
+        super().__init__(bot, guild_id, timeout=600)
+    @discord.ui.button(label="Use /admin to reopen panel", style=discord.ButtonStyle.secondary, disabled=True)
+    async def dummy(self, interaction, button):
+        pass
+
+# ------------------------------------------------------------------
+# AutoPost Menu (Full Settings)
+# ------------------------------------------------------------------
 class AutoPostMenu(BaseConfigView):
     def __init__(self, bot, guild_id):
         super().__init__(bot, guild_id, timeout=600)
-        # Initialise button states from DB
         self._init_states = asyncio.create_task(self._fetch_states())
 
     async def _fetch_states(self):
-        # Pre‑read toggle states so we can style the buttons immediately
         daily_enabled = await self.get_setting("daily_tip_enabled", "true")
         self.toggle_daily.label = "Daily Tip: ON" if daily_enabled == "true" else "Daily Tip: OFF"
         self.toggle_daily.style = discord.ButtonStyle.success if daily_enabled == "true" else discord.ButtonStyle.danger
@@ -19,7 +40,6 @@ class AutoPostMenu(BaseConfigView):
         self.toggle_weekly.label = "Weekly Scene: ON" if weekly_enabled == "true" else "Weekly Scene: OFF"
         self.toggle_weekly.style = discord.ButtonStyle.success if weekly_enabled == "true" else discord.ButtonStyle.danger
 
-    # Channel buttons
     @discord.ui.button(label="Set Tips Channel", style=discord.ButtonStyle.success, emoji="#️⃣")
     async def tips_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
         view = ChannelSelectView(self.bot, self.guild_id, "tips_channel", parent_menu=self)
@@ -32,7 +52,6 @@ class AutoPostMenu(BaseConfigView):
         await interaction.response.edit_message(content="Select a channel for weekly scene ideas:", view=view)
         view.message = await interaction.original_response()
 
-    # Toggle buttons (row=1)
     @discord.ui.button(label="Daily Tip: ON", style=discord.ButtonStyle.success, emoji="✅", row=1)
     async def toggle_daily(self, interaction: discord.Interaction, button: discord.ui.Button):
         current = await self.get_setting("daily_tip_enabled", "true")
@@ -53,7 +72,6 @@ class AutoPostMenu(BaseConfigView):
         await interaction.response.edit_message(view=self)
         self.message = await interaction.original_response()
 
-    # Time & colour modals (row=2)
     @discord.ui.button(label="Daily Time", style=discord.ButtonStyle.primary, emoji="🕐", row=2)
     async def set_daily_time(self, interaction: discord.Interaction, button: discord.ui.Button):
         current = await self.get_setting("daily_tip_time", "12:00")
@@ -72,14 +90,12 @@ class AutoPostMenu(BaseConfigView):
         modal = SetColourModal(self.bot, self.guild_id, current, parent_view=self)
         await interaction.response.send_modal(modal)
 
-    # Mention role (row=3)
     @discord.ui.button(label="Mention Role", style=discord.ButtonStyle.success, emoji="📢", row=3)
     async def mention_role(self, interaction: discord.Interaction, button: discord.ui.Button):
         view = RoleSelectView(self.bot, self.guild_id, "mention_role_id", parent_menu=self)
         await interaction.response.edit_message(content="Select a role to mention before each post:", view=view)
         view.message = await interaction.original_response()
 
-    # Custom tips & scenes management (row=4)
     @discord.ui.button(label="Manage Custom Tips", style=discord.ButtonStyle.secondary, emoji="💬", row=4)
     async def custom_tips(self, interaction: discord.Interaction, button: discord.ui.Button):
         view = CustomTipsMenu(self.bot, self.guild_id)
@@ -92,7 +108,6 @@ class AutoPostMenu(BaseConfigView):
         await interaction.response.edit_message(content="**Custom Scene Prompts**", view=view)
         view.message = await interaction.original_response()
 
-    # Test post (row=5)
     @discord.ui.button(label="Test Daily Post", style=discord.ButtonStyle.gray, emoji="🚀", row=5)
     async def test_daily(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._test_post(interaction, "daily")
@@ -101,17 +116,14 @@ class AutoPostMenu(BaseConfigView):
     async def test_weekly(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._test_post(interaction, "weekly")
 
-    # Back button
     @discord.ui.button(label="Back", style=discord.ButtonStyle.danger, row=5)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Uses the temporary MainMenu defined in this file.
         view = MainMenu(self.bot, self.guild_id)
         await interaction.response.edit_message(content="**Admin Panel**", view=view)
         view.message = await interaction.original_response()
 
-    # ── Helper for test posts ──
     async def _test_post(self, interaction, post_type):
-        """Grab settings and fire a test post to the configured channel."""
-        # Defer because we might need time to fetch settings and send
         await interaction.response.defer(ephemeral=True)
 
         if post_type == "daily":
@@ -147,12 +159,10 @@ class AutoPostMenu(BaseConfigView):
         if not channel:
             return await interaction.followup.send("❌ Configured channel not found.", ephemeral=True)
 
-        # Build prompt list
         custom_list = await self._get_json_setting(custom_key, [])
         all_prompts = default_prompts + custom_list if custom_list else default_prompts
         prompt = random.choice(all_prompts)
 
-        # Colour and role
         color = await self.get_setting("embed_color", "dc2626")
         color_int = int(color, 16) if color else 0xDC2626
         mention_role_id = await self.get_setting("mention_role_id", None)
@@ -171,20 +181,18 @@ class AutoPostMenu(BaseConfigView):
             return default
 
     async def _send_embed_to_channel(self, channel, title, description, color, mention_role_id):
-        """Minimal embed sender (like the Cog's helper)."""
         embed = discord.Embed(title=title, description=description, color=color)
         embed.set_footer(text="BDSM Collective • Stay safe, stay kinky")
-
-        # Optional image (kept simple; you can add a random image like the Cog does if you want)
         content = None
         if mention_role_id:
             role = channel.guild.get_role(mention_role_id)
             if role:
                 content = role.mention
-
         await channel.send(content=content, embed=embed)
 
-# ──────────────────── Custom Tips / Scenes Sub‑Menus ────────────────────
+# ------------------------------------------------------------------
+# Custom Tips / Scenes Sub‑Menus
+# ------------------------------------------------------------------
 class CustomTipsMenu(BaseConfigView):
     def __init__(self, bot, guild_id):
         super().__init__(bot, guild_id, timeout=300)
@@ -271,9 +279,10 @@ class CustomScenesMenu(BaseConfigView):
         except:
             return []
 
-# ──────────────────── Shared Modals & Views ────────────────────
+# ------------------------------------------------------------------
+# Shared Modals & Views
+# ------------------------------------------------------------------
 class SetTimeModal(discord.ui.Modal, title="Set Time (UTC)"):
-    """Modal for daily time (HH:MM) or weekly (e.g. Monday 18:00)."""
     def __init__(self, key, current_value, bot, guild_id, parent_view=None, weekly=False):
         super().__init__()
         self.key = key
@@ -288,7 +297,6 @@ class SetTimeModal(discord.ui.Modal, title="Set Time (UTC)"):
     async def on_submit(self, interaction: discord.Interaction):
         value = self.children[0].value.strip()
         if self.weekly:
-            # Basic validation
             parts = value.split()
             if len(parts) != 2:
                 await interaction.response.send_message("❌ Format: Day HH:MM, e.g. Monday 18:00", ephemeral=True)
@@ -343,7 +351,6 @@ class SetColourModal(discord.ui.Modal, title="Embed Colour"):
             view.message = await interaction.original_response()
 
 class AddTextModal(discord.ui.Modal, title="Add Custom Text"):
-    """Reusable modal for adding a tip or scene."""
     def __init__(self, setting_key, item_name, bot, guild_id, parent_view=None):
         super().__init__()
         self.setting_key = setting_key
@@ -358,8 +365,6 @@ class AddTextModal(discord.ui.Modal, title="Add Custom Text"):
         if not text:
             await interaction.response.send_message("❌ Cannot be empty.", ephemeral=True)
             return
-
-        # Read current list, append, save
         async with self.bot.db_pool.acquire() as conn:
             row = await conn.fetchrow(
                 "SELECT value FROM configs WHERE guild_id=$1 AND key=$2",
@@ -372,7 +377,6 @@ class AddTextModal(discord.ui.Modal, title="Add Custom Text"):
                 "ON CONFLICT (guild_id,key) DO UPDATE SET value=$3",
                 self.guild_id, self.setting_key, json.dumps(items)
             )
-
         await interaction.response.edit_message(
             content=f"✅ Added {self.item_name}: **{text}**",
             view=self.parent_view
@@ -380,7 +384,6 @@ class AddTextModal(discord.ui.Modal, title="Add Custom Text"):
         self.parent_view.message = await interaction.original_response()
 
 class RemoveItemView(BaseConfigView):
-    """A select menu to remove one item from a list (tips or scenes)."""
     def __init__(self, bot, guild_id, setting_key, items, parent_menu=None):
         super().__init__(bot, guild_id, timeout=120)
         self.setting_key = setting_key
@@ -409,3 +412,150 @@ class RemoveItemView(BaseConfigView):
     async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(view=self.parent_menu)
         self.parent_menu.message = await interaction.original_response()
+
+# ------------------------------------------------------------------
+# The actual AutoPost cog (the one that runs scheduled posts)
+# ------------------------------------------------------------------
+class AutoPost(commands.Cog):
+    def __init__(self, bot):
+        self.bot = bot
+        self.daily_tip.start()
+        self.weekly_scene.start()
+
+    def cog_unload(self):
+        self.daily_tip.cancel()
+        self.weekly_scene.cancel()
+
+    # --- Helper: get a setting ---
+    async def get_setting(self, guild_id, key, default=None):
+        async with self.bot.db_pool.acquire() as conn:
+            row = await conn.fetchrow(
+                "SELECT value FROM configs WHERE guild_id=$1 AND key=$2",
+                guild_id, key
+            )
+            return row['value'] if row else default
+
+    # --- Helper: get a random image from the images folder ---
+    def get_random_image(self):
+        image_dir = os.path.join(os.path.dirname(__file__), '..', 'images')
+        if not os.path.isdir(image_dir):
+            return None
+        valid_extensions = ('.png', '.jpg', '.jpeg', '.gif', '.webp')
+        try:
+            files = [f for f in os.listdir(image_dir) if f.lower().endswith(valid_extensions)]
+            if not files:
+                return None
+            chosen = random.choice(files)
+            return os.path.join(image_dir, chosen)
+        except Exception as e:
+            logger.warning(f"Could not read images folder: {e}")
+            return None
+
+    # --- Helper: get a channel by setting key ---
+    async def get_channel_by_setting(self, guild, key):
+        channel_id_str = await self.get_setting(guild.id, key)
+        if not channel_id_str:
+            return None
+        try:
+            channel_id = int(channel_id_str)
+        except ValueError:
+            return None
+        return guild.get_channel(channel_id)
+
+    # --- Helper: send an embed (with optional image and role mention) ---
+    async def _send_embed(self, channel, title, description, color=0xDC2626,
+                          footer="BDSM Collective • Stay safe, stay kinky",
+                          mention_role=None):
+        image_path = self.get_random_image()
+        embed = discord.Embed(title=title, description=description, color=color)
+        embed.set_footer(text=footer)
+        file = None
+        if image_path:
+            file = discord.File(image_path, filename=os.path.basename(image_path))
+            embed.set_image(url=f"attachment://{os.path.basename(image_path)}")
+        content = None
+        if mention_role and channel.guild:
+            role = channel.guild.get_role(mention_role)
+            if role:
+                content = role.mention
+        await channel.send(content=content, embed=embed, file=file)
+
+    # --- Daily tip loop ---
+    @tasks.loop(hours=24)
+    async def daily_tip(self):
+        await self.bot.wait_until_ready()
+        tips = [
+            "💡 Always negotiate before a scene.",
+            "💡 Aftercare is essential – cuddles, water, and talk.",
+            "💡 Check in with your partner's emotional state regularly.",
+            "💡 Safewords are not a sign of weakness but of trust.",
+            "💡 Consent can be withdrawn at any time.",
+        ]
+        for guild in self.bot.guilds:
+            try:
+                enabled = await self.get_setting(guild.id, "daily_tip_enabled", "true")
+                if enabled != "true":
+                    continue
+                channel = await self.get_channel_by_setting(guild, "tips_channel")
+                if not channel:
+                    continue
+                custom_tips_json = await self.get_setting(guild.id, "custom_tips")
+                custom_tips = json.loads(custom_tips_json) if custom_tips_json else []
+                all_tips = tips + custom_tips if custom_tips else tips
+                color = await self.get_setting(guild.id, "embed_color", "dc2626")
+                color_int = int(color, 16) if color else 0xDC2626
+                mention_role_id = await self.get_setting(guild.id, "mention_role_id")
+                mention_role_id = int(mention_role_id) if mention_role_id and mention_role_id.isdigit() else None
+                await self._send_embed(channel, "🌟 Daily Kink Tip", random.choice(all_tips),
+                                       color=color_int, mention_role=mention_role_id)
+                logger.info(f"Daily tip sent to {guild.name} / #{channel.name}")
+            except discord.Forbidden:
+                logger.warning(f"No permission in {guild.name}")
+            except discord.HTTPException as e:
+                logger.error(f"HTTP error in {guild.name}: {e}")
+            except Exception:
+                logger.exception(f"Unexpected error in daily tip for {guild.name}")
+
+    # --- Weekly scene loop ---
+    @tasks.loop(hours=168)  # 7 days
+    async def weekly_scene(self):
+        await self.bot.wait_until_ready()
+        default_scenes = [
+            "🎭 **Scene Idea:** Sensory deprivation – blindfold, headphones, and feather touch.",
+            "🎭 **Scene Idea:** Predator/prey – hide and seek in a safe space.",
+            "🎭 **Scene Idea:** Service sub day – serve your Dom/me breakfast in bed.",
+        ]
+        for guild in self.bot.guilds:
+            try:
+                enabled = await self.get_setting(guild.id, "weekly_scene_enabled", "true")
+                if enabled != "true":
+                    continue
+                channel = await self.get_channel_by_setting(guild, "scenes_channel")
+                if not channel:
+                    continue
+                custom_scenes_json = await self.get_setting(guild.id, "custom_scenes")
+                custom_scenes = json.loads(custom_scenes_json) if custom_scenes_json else []
+                all_scenes = default_scenes + custom_scenes if custom_scenes else default_scenes
+                color = await self.get_setting(guild.id, "embed_color", "dc2626")
+                color_int = int(color, 16) if color else 0xDC2626
+                mention_role_id = await self.get_setting(guild.id, "mention_role_id")
+                mention_role_id = int(mention_role_id) if mention_role_id and mention_role_id.isdigit() else None
+                await self._send_embed(channel, "📋 Weekly Scene Prompt", random.choice(all_scenes),
+                                       color=color_int, footer="BDSM Collective • Play responsibly",
+                                       mention_role=mention_role_id)
+                logger.info(f"Weekly scene sent to {guild.name} / #{channel.name}")
+            except discord.Forbidden:
+                logger.warning(f"No permission in {guild.name}")
+            except discord.HTTPException as e:
+                logger.error(f"HTTP error in {guild.name}: {e}")
+            except Exception:
+                logger.exception(f"Unexpected error in weekly scene for {guild.name}")
+
+    @daily_tip.before_loop
+    @weekly_scene.before_loop
+    async def before_loops(self):
+        await self.bot.wait_until_ready()
+        await asyncio.sleep(10)
+
+async def setup(bot):
+    await bot.add_cog(AutoPost(bot))
