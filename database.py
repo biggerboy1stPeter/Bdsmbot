@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # -------------------------------------------------------------------
-# SQL schema (from your file, fully corrected)
+# Complete database schema (PostgreSQL)
 # -------------------------------------------------------------------
 SCHEMA_SQL = """
 -- Profiles: stores user BDSM profiles (role and bio)
@@ -87,25 +87,26 @@ CREATE INDEX IF NOT EXISTS idx_configs_guild ON configs (guild_id);
 CREATE INDEX IF NOT EXISTS idx_custom_tasks_guild ON custom_tasks (guild_id);
 """
 
+async def enforce_schema(pool: asyncpg.Pool):
+    """Create all tables if they don't exist using the given database pool."""
+    async with pool.acquire() as conn:
+        await conn.execute(SCHEMA_SQL)
+        print("✅ Database schema verified/created")
+
 async def init_database():
-    """Create all tables if they don't exist."""
+    """Standalone function to create schema using DATABASE_URL directly."""
     database_url = os.getenv("DATABASE_URL")
     if not database_url:
         raise ValueError("DATABASE_URL environment variable not set")
-
-    print("📦 Connecting to database to enforce schema...")
     conn = await asyncpg.connect(database_url)
     try:
         await conn.execute(SCHEMA_SQL)
-        print("✅ Database schema verified/created successfully")
-    except Exception as e:
-        print(f"❌ Failed to create schema: {e}")
-        raise
+        print("✅ Database schema created successfully")
     finally:
         await conn.close()
 
 def run_init():
-    """Synchronous entry point for standalone script."""
+    """Synchronous entry point for standalone execution."""
     asyncio.run(init_database())
 
 if __name__ == "__main__":
