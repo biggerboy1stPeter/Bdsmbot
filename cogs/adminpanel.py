@@ -3,6 +3,7 @@ import re
 import json
 import random
 import asyncio
+import logging
 from datetime import datetime, timedelta, time
 from typing import List, Dict, Optional
 
@@ -71,6 +72,70 @@ class AdminPanel(commands.Cog):
         await interaction.response.send_message(embed=embed, view=view, ephemeral=True)
         view.message = await interaction.original_response()
 
+    @app_commands.command(name="uploadimage", description="Upload an image to the bot's image folder")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.describe(
+        file="The image file to upload",
+        filename="Optional: custom filename (without extension)"
+    )
+    async def upload_image(
+        self,
+        interaction: discord.Interaction,
+        file: discord.Attachment,
+        filename: str = None
+    ):
+        """Save an uploaded image to the bot's images/ folder."""
+        await interaction.response.defer(ephemeral=True)
+
+        # 1. Validate file type
+        valid_extensions = ('.png', '.jpg', '.jpeg', '.gif', '.webp')
+        if not file.filename.lower().endswith(valid_extensions):
+            await interaction.followup.send(
+                "❌ Unsupported file type. Allowed: PNG, JPG, JPEG, GIF, WEBP.",
+                ephemeral=True
+            )
+            return
+
+        # 2. Determine where to save
+        image_dir = os.path.join(os.path.dirname(__file__), '..', 'images')
+        os.makedirs(image_dir, exist_ok=True)
+
+        # 3. Build a safe filename
+        if filename:
+            safe_name = re.sub(r'[^\w\-]', '_', filename.strip())
+            if not safe_name:
+                safe_name = "uploaded"
+        else:
+            base = os.path.splitext(file.filename)[0]
+            safe_name = re.sub(r'[^\w\-]', '_', base)
+
+        ext = os.path.splitext(file.filename)[1].lower()
+        final_name = f"{safe_name}{ext}"
+
+        final_path = os.path.join(image_dir, final_name)
+        counter = 1
+        while os.path.exists(final_path):
+            name_no_ext = safe_name
+            final_name = f"{name_no_ext}_{counter}{ext}"
+            final_path = os.path.join(image_dir, final_name)
+            counter += 1
+
+        # 4. Download and save
+        try:
+            await file.save(final_path)
+            await interaction.followup.send(
+                f"✅ Image saved as `{final_name}` and is now available in the admin panel.",
+                ephemeral=True
+            )
+            logger.info(f"Image uploaded by {interaction.user}: {final_name}")
+        except Exception as e:
+            logger.error(f"Failed to save uploaded image: {e}")
+            await interaction.followup.send(
+                "❌ Failed to save the image. Check bot permissions and disk space.",
+                ephemeral=True
+            )
+
 async def setup(bot):
     await bot.add_cog(AdminPanel(bot))
 
@@ -118,9 +183,72 @@ class MainMenu(BaseConfigView):
         await interaction.response.edit_message(content="**Embed Builder**", view=view)
         view.message = await interaction.original_response()
 
+    @discord.ui.button(label="Manage Images", style=discord.ButtonStyle.grey, emoji="🖼️")
+    async def images_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = ImageManagerView(self.bot, self.guild_id)
+        await interaction.response.edit_message(content="**Image Manager**", view=view)
+        view.message = await interaction.original_response()
+
     @discord.ui.button(label="Close", style=discord.ButtonStyle.danger, row=2)
     async def close_button(self, interaction: discord.Interaction, button: discord.ui.Button):
         await interaction.response.edit_message(content="Panel closed.", view=None)
+
+# ------------------- Image Manager View -------------------
+class ImageManagerView(BaseConfigView):
+    def __init__(self, bot, guild_id):
+        super().__init__(bot, guild_id, timeout=300)
+        self.image_dir = os.path.join(os.path.dirname(__file__), '..', 'images')
+        self._refresh_options()
+
+    def _refresh_options(self):
+        options = self._get_file_options()
+        if not options:
+            options = [discord.SelectOption(label="❌ No images", value="0")]
+        self.children[0].options = options  # the select menu is always the first child
+
+    def _get_file_options(self):
+        if not os.path.isdir(self.image_dir):
+            return []
+        valid_extensions = ('.png', '.jpg', '.jpeg', '.gif', '.webp')
+        options = []
+        for f in sorted(os.listdir(self.image_dir)):
+            if f.lower().endswith(valid_extensions):
+                options.append(discord.SelectOption(label=f, value=f))
+        return options[:25]
+
+    @discord.ui.select(placeholder="Select an image to delete...")
+    async def image_select(self, interaction: discord.Interaction, select: discord.ui.Select):
+        filename = select.values[0]
+        if filename == "0":
+            await interaction.response.send_message("No images available.", ephemeral=True)
+            return
+        # Store selection for delete confirmation
+        self._selected = filename
+        await interaction.response.send_message(f"Image **{filename}** selected. Click **Delete** to remove it.", ephemeral=True)
+
+    @discord.ui.button(label="Delete Selected", style=discord.ButtonStyle.danger, emoji="🗑️")
+    async def delete_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not hasattr(self, '_selected') or not self._selected:
+            await interaction.response.send_message("No image selected. Use the dropdown first.", ephemeral=True)
+            return
+        filepath = os.path.join(self.image_dir, self._selected)
+        try:
+            os.remove(filepath)
+            await interaction.response.send_message(f"✅ Deleted **{self._selected}**.", ephemeral=True)
+            logger.info(f"Image deleted by {interaction.user}: {self._selected}")
+            del self._selected
+            # Refresh the dropdown
+            self._refresh_options()
+            await interaction.edit_original_response(view=self)
+        except Exception as e:
+            logger.error(f"Error deleting image {self._selected}: {e}")
+            await interaction.response.send_message("❌ Could not delete the file.", ephemeral=True)
+
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.danger)
+    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = MainMenu(self.bot, self.guild_id)
+        await interaction.response.edit_message(content="**Admin Panel**", view=view)
+        view.message = await interaction.original_response()
 
 # ------------------- Moderation Menu -------------------
 class ModerationMenu(BaseConfigView):
