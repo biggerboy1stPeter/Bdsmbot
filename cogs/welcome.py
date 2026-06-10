@@ -1,3 +1,4 @@
+import asyncio
 import discord
 from discord.ext import commands
 from discord import app_commands
@@ -79,7 +80,6 @@ class Welcome(commands.Cog):
                     read_message_history=True,
                     manage_messages=True
                 )
-        # Also add any role with administrator permission? Not necessary.
 
         try:
             verify_channel = await guild.create_text_channel(
@@ -173,8 +173,6 @@ class Welcome(commands.Cog):
     async def _close_verification_channel(self, member: discord.Member, interaction: discord.Interaction):
         """Find the user's verification channel, send a goodbye message, and delete it."""
         guild = member.guild
-        safe_name = member.name.replace(' ', '-').lower()
-        target_name = f"🔐-verify-{safe_name}"[:100]
 
         for channel in guild.text_channels:
             if channel.name.startswith("🔐-verify-") and member in channel.overwrites:
