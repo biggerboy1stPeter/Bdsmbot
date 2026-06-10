@@ -10,6 +10,9 @@ from discord.ext import commands
 from dotenv import load_dotenv
 from aiohttp import web
 
+# Import the schema enforcer
+from database import enforce_schema
+
 # Load environment variables
 load_dotenv()
 
@@ -57,6 +60,11 @@ class KinkBot(commands.Bot):
                 max_size=10
             )
             logger.info("✅ Database connected")
+            
+            # Create tables if they don't exist
+            await enforce_schema(self.db_pool)
+            logger.info("✅ Database schema enforced")
+            
         except Exception as e:
             logger.critical(f"❌ Database connection failed: {e}")
             sys.exit(1)
