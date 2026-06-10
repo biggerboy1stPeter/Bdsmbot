@@ -9,14 +9,20 @@ load_dotenv()
 # Complete database schema (PostgreSQL)
 # -------------------------------------------------------------------
 SCHEMA_SQL = """
--- Profiles: stores user BDSM profiles (role and bio)
+-- Profiles: stores user BDSM profiles
 CREATE TABLE IF NOT EXISTS profiles (
     user_id BIGINT PRIMARY KEY,
     role TEXT CHECK (role IN ('Dom', 'Sub', 'Switch')),
     about TEXT,
+    limits TEXT,
+    experience TEXT,
     created_at TIMESTAMP DEFAULT NOW(),
     updated_at TIMESTAMP DEFAULT NOW()
 );
+
+-- If the table already exists, make sure the new columns are added
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS limits TEXT;
+ALTER TABLE profiles ADD COLUMN IF NOT EXISTS experience TEXT;
 
 -- Kink lists: per‑user arrays of kinks
 CREATE TABLE IF NOT EXISTS kinklists (
