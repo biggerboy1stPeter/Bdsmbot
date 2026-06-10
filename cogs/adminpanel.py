@@ -546,9 +546,18 @@ class EmbedBuilderView(BaseConfigView):
         self.preview_sent = False
 
     def build_embed(self) -> discord.Embed:
+        """Construct an embed from current data."""
+        title = self.embed_data["title"]
+        description = self.embed_data["description"]
+
+        # Discord requires at least a non‑empty description (or title).
+        # If both are missing, use a zero‑width space to keep the embed valid.
+        if not title and not description:
+            description = "\u200b"
+
         embed = discord.Embed(
-            title=self.embed_data["title"],
-            description=self.embed_data["description"],
+            title=title,
+            description=description,
             color=self.embed_data["color"]
         )
         if self.embed_data["author_name"]:
@@ -635,8 +644,25 @@ class EmbedBuilderView(BaseConfigView):
     @discord.ui.button(label="Preview", style=discord.ButtonStyle.secondary, emoji="👁️", row=3)
     async def preview(self, interaction: discord.Interaction, button: discord.ui.Button):
         embed = self.build_embed()
+
+        # If the embed has absolutely no content (title, description, fields, images, etc.)
+        # show a friendly warning instead of sending an empty embed that Discord would reject.
+        has_content = (
+            self.embed_data["title"] or self.embed_data["description"]
+            or self.embed_data["fields"] or self.embed_data["author_name"]
+            or self.embed_data["footer_text"] or self._file_path
+            or self.embed_data["image_url"] or self.embed_data["thumbnail_url"]
+        )
+        if not has_content:
+            await interaction.response.send_message(
+                "⚠️ Your embed is empty. Add some content before previewing.",
+                ephemeral=True
+            )
+            return
+
         if self._file_path:
             embed.description = (embed.description or "") + "\n\n🖼️ *Local image file will be attached on send.*"
+
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
     @discord.ui.button(label="Send", style=discord.ButtonStyle.success, emoji="📨", row=3)
