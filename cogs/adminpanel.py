@@ -475,6 +475,25 @@ class ServerConfigMenu(BaseConfigView):
         await interaction.response.edit_message(content="Select a channel for moderation logs:", view=view)
         view.message = await interaction.original_response()
 
+    # ─── NEW: Welcome/Verification Settings ───
+    @discord.ui.button(label="Welcome Channel", style=discord.ButtonStyle.success, emoji="#️⃣")
+    async def welcome_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = ChannelSelectView(self.bot, self.guild_id, "welcome_channel_id", parent_menu=self)
+        await interaction.response.edit_message(content="Select the welcome channel:", view=view)
+        view.message = await interaction.original_response()
+
+    @discord.ui.button(label="Verification Category", style=discord.ButtonStyle.success, emoji="📂")
+    async def verification_category(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = CategorySelectView(self.bot, self.guild_id, "verification_category_id", parent_menu=self)
+        await interaction.response.edit_message(content="Select the category for verification channels:", view=view)
+        view.message = await interaction.original_response()
+
+    @discord.ui.button(label="Verified Role", style=discord.ButtonStyle.success, emoji="✅")
+    async def verified_role(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = RoleSelectView(self.bot, self.guild_id, "verified_role_id", parent_menu=self)
+        await interaction.response.edit_message(content="Select the role given to verified members:", view=view)
+        view.message = await interaction.original_response()
+
     @discord.ui.button(label="Back", style=discord.ButtonStyle.danger)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
         view = MainMenu(self.bot, self.guild_id)
@@ -553,6 +572,47 @@ class RoleSelectView(BaseConfigView):
         role_id = select.values[0]
         await self.set_setting(self.setting_key, role_id)
         msg = f"✅ Role set to <@&{role_id}>"
+        view = self.parent_menu if self.parent_menu else None
+        await interaction.response.edit_message(content=msg, view=view)
+        if view:
+            view.message = await interaction.original_response()
+
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.danger)
+    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if self.parent_menu:
+            await interaction.response.edit_message(view=self.parent_menu)
+            self.parent_menu.message = await interaction.original_response()
+        else:
+            await interaction.response.edit_message(content="Cancelled.", view=None)
+
+# ──────────────── NEW: Category Select (for Verification) ────────────────
+class CategorySelectView(BaseConfigView):
+    def __init__(self, bot, guild_id, setting_key, parent_menu=None):
+        super().__init__(bot, guild_id, timeout=120)
+        self.setting_key = setting_key
+        self.parent_menu = parent_menu
+        options = self.get_category_options()
+        if not options:
+            options = [discord.SelectOption(label="❌ No categories found", value="0", default=True)]
+        self.select_menu.options = options
+
+    def get_category_options(self):
+        guild = self.bot.get_guild(self.guild_id)
+        if not guild:
+            return []
+        options = []
+        for channel in guild.categories:
+            options.append(discord.SelectOption(label=channel.name, value=str(channel.id)))
+        return options[:25]
+
+    @discord.ui.select(placeholder="Choose a category...", min_values=1, max_values=1)
+    async def select_menu(self, interaction: discord.Interaction, select: discord.ui.Select):
+        if select.values[0] == "0":
+            await interaction.response.send_message("❌ No categories found.", ephemeral=True)
+            return
+        category_id = select.values[0]
+        await self.set_setting(self.setting_key, category_id)
+        msg = f"✅ Category set to <#{category_id}>"
         view = self.parent_menu if self.parent_menu else None
         await interaction.response.edit_message(content=msg, view=view)
         if view:
