@@ -326,15 +326,16 @@ class AutoPostMenu(BaseConfigView):
         await interaction.response.edit_message(content="**Custom Scene Prompts**", view=view)
         view.message = await interaction.original_response()
 
-    @discord.ui.button(label="Test Daily Post", style=discord.ButtonStyle.gray, emoji="🚀", row=5)
+    # Fixed: row=4 instead of row=5 (maximum allowed row is 4)
+    @discord.ui.button(label="Test Daily Post", style=discord.ButtonStyle.gray, emoji="🚀", row=4)
     async def test_daily(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._test_post(interaction, "daily")
 
-    @discord.ui.button(label="Test Weekly Post", style=discord.ButtonStyle.gray, emoji="🚀", row=5)
+    @discord.ui.button(label="Test Weekly Post", style=discord.ButtonStyle.gray, emoji="🚀", row=4)
     async def test_weekly(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._test_post(interaction, "weekly")
 
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.danger, row=5)
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.danger, row=4)
     async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
         view = MainMenu(self.bot, self.guild_id)
         await interaction.response.edit_message(content="**Admin Panel**", view=view)
