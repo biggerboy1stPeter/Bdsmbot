@@ -141,9 +141,9 @@ class MainMenu(BaseConfigView):
 
     @discord.ui.button(label="Create Embed Post", style=discord.ButtonStyle.grey, emoji="📝")
     async def embed_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        view = EmbedBuilderView(self.bot, self.guild_id)
-        await interaction.response.edit_message(content="**Embed Builder**", view=view)
-        view.message = await interaction.original_response()
+        # Open the single‑modal embed builder
+        modal = EmbedFormModal(self.bot, self.guild_id)
+        await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Manage Images", style=discord.ButtonStyle.grey, emoji="🖼️")
     async def images_button(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -326,7 +326,7 @@ class AutoPostMenu(BaseConfigView):
         await interaction.response.edit_message(content="**Custom Scene Prompts**", view=view)
         view.message = await interaction.original_response()
 
-    # Fixed: row=4 instead of row=5 (maximum allowed row is 4)
+    # Fixed: row=4 instead of row=5
     @discord.ui.button(label="Test Daily Post", style=discord.ButtonStyle.gray, emoji="🚀", row=4)
     async def test_daily(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._test_post(interaction, "daily")
@@ -527,200 +527,96 @@ class AddWordModal(discord.ui.Modal, title="Add Profanity Word"):
         if view:
             view.message = await interaction.original_response()
 
-# ──────────────── Embed Builder (full MVP) ────────────────
-class EmbedBuilderView(BaseConfigView):
+# ================= NEW SINGLE‑MODAL EMBED BUILDER =================
+
+class EmbedFormModal(discord.ui.Modal, title="Create Embed"):
+    """One modal to rule them all – collects all embed fields in a single dialog."""
     def __init__(self, bot, guild_id):
-        super().__init__(bot, guild_id, timeout=600)
-        self.embed_data = {
-            "title": None,
-            "description": None,
-            "color": 0xDC2626,
-            "author_name": None,
-            "author_icon_url": None,
-            "footer_text": None,
-            "footer_icon_url": None,
-            "image_url": None,
-            "thumbnail_url": None,
-            "fields": []
-        }
-        self._file_path = None
-        self.preview_sent = False
+        super().__init__()
+        self.bot = bot
+        self.guild_id = guild_id
 
-    def build_embed(self) -> discord.Embed:
-        """Construct an embed from current data."""
-        title = self.embed_data["title"]
-        description = self.embed_data["description"]
+        # Add all input fields
+        self.add_item(discord.ui.TextInput(label="Title", required=False, max_length=256))
+        self.add_item(discord.ui.TextInput(label="Description", style=discord.TextStyle.long, required=False, max_length=4096))
+        self.add_item(discord.ui.TextInput(label="Color (hex, e.g. dc2626)", required=False, max_length=7))
+        self.add_item(discord.ui.TextInput(label="Author name", required=False, max_length=256))
+        self.add_item(discord.ui.TextInput(label="Author icon URL", required=False))
+        self.add_item(discord.ui.TextInput(label="Footer text", required=False, max_length=2048))
+        self.add_item(discord.ui.TextInput(label="Footer icon URL", required=False))
+        self.add_item(discord.ui.TextInput(label="Image URL", required=False))
+        self.add_item(discord.ui.TextInput(label="Thumbnail URL", required=False))
+        self.add_item(discord.ui.TextInput(
+            label="Fields (JSON array)",
+            style=discord.TextStyle.long,
+            required=False,
+            placeholder='[{"name":"Field1","value":"Value1","inline":true}]'
+        ))
 
-        # Discord requires at least a non‑empty description (or title).
-        # If both are missing, use a zero‑width space to keep the embed valid.
-        if not title and not description:
-            description = "\u200b"
+    async def on_submit(self, interaction: discord.Interaction):
+        # Build embed from modal inputs
+        embed = discord.Embed()
 
-        embed = discord.Embed(
-            title=title,
-            description=description,
-            color=self.embed_data["color"]
-        )
-        if self.embed_data["author_name"]:
-            embed.set_author(
-                name=self.embed_data["author_name"],
-                icon_url=self.embed_data["author_icon_url"] or None
-            )
-        if self.embed_data["footer_text"]:
-            embed.set_footer(
-                text=self.embed_data["footer_text"],
-                icon_url=self.embed_data["footer_icon_url"] or None
-            )
-        if not self._file_path and self.embed_data["image_url"]:
-            embed.set_image(url=self.embed_data["image_url"])
-        if self.embed_data["thumbnail_url"]:
-            embed.set_thumbnail(url=self.embed_data["thumbnail_url"])
-        for field in self.embed_data["fields"]:
-            embed.add_field(
-                name=field["name"],
-                value=field["value"],
-                inline=field.get("inline", True)
-            )
-        return embed
+        # Title
+        if self.children[0].value:
+            embed.title = self.children[0].value
 
-    @discord.ui.button(label="Title", style=discord.ButtonStyle.primary, emoji="✏️", row=0)
-    async def set_title(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = SetTextModal("Title", "title", self)
-        await interaction.response.send_modal(modal)
+        # Description
+        if self.children[1].value:
+            embed.description = self.children[1].value
 
-    @discord.ui.button(label="Description", style=discord.ButtonStyle.primary, emoji="📄", row=0)
-    async def set_description(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = SetTextModal("Description", "description", self, long=True)
-        await interaction.response.send_modal(modal)
+        # Color
+        if self.children[2].value:
+            try:
+                color_hex = self.children[2].value.strip('#')
+                embed.color = int(color_hex, 16)
+            except ValueError:
+                await interaction.response.send_message("❌ Invalid hex color. Use format like `dc2626`.", ephemeral=True)
+                return
 
-    @discord.ui.button(label="Color", style=discord.ButtonStyle.primary, emoji="🎨", row=0)
-    async def set_color(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = SetColorModal(self)
-        await interaction.response.send_modal(modal)
+        # Author
+        if self.children[3].value:
+            embed.set_author(name=self.children[3].value, icon_url=self.children[4].value or None)
 
-    @discord.ui.button(label="Author", style=discord.ButtonStyle.primary, emoji="👤", row=1)
-    async def set_author(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = AuthorModal(self)
-        await interaction.response.send_modal(modal)
+        # Footer
+        if self.children[5].value:
+            embed.set_footer(text=self.children[5].value, icon_url=self.children[6].value or None)
 
-    @discord.ui.button(label="Footer", style=discord.ButtonStyle.primary, emoji="📌", row=1)
-    async def set_footer(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = FooterModal(self)
-        await interaction.response.send_modal(modal)
+        # Image URL
+        if self.children[7].value:
+            embed.set_image(url=self.children[7].value)
 
-    @discord.ui.button(label="Image URL", style=discord.ButtonStyle.primary, emoji="🖼️", row=1)
-    async def set_image_url(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = URLModal("Image URL", "image_url", self)
-        await interaction.response.send_modal(modal)
-        self._file_path = None
+        # Thumbnail URL
+        if self.children[8].value:
+            embed.set_thumbnail(url=self.children[8].value)
 
-    @discord.ui.button(label="Image File", style=discord.ButtonStyle.primary, emoji="📂", row=2)
-    async def set_image_file(self, interaction: discord.Interaction, button: discord.ui.Button):
-        view = FileSelectView(self.bot, self.guild_id, parent_builder=self)
-        await interaction.response.edit_message(content="Select an image from the local folder:", view=view)
-        view.message = await interaction.original_response()
+        # Fields (JSON)
+        if self.children[9].value:
+            try:
+                fields = json.loads(self.children[9].value)
+                if not isinstance(fields, list):
+                    raise ValueError("Fields must be a JSON array")
+                for f in fields:
+                    embed.add_field(
+                        name=f.get('name', 'Untitled'),
+                        value=f.get('value', ''),
+                        inline=f.get('inline', True)
+                    )
+            except Exception as e:
+                await interaction.response.send_message(f"❌ Invalid JSON in Fields: {e}", ephemeral=True)
+                return
 
-    @discord.ui.button(label="Thumbnail URL", style=discord.ButtonStyle.primary, emoji="🔍", row=2)
-    async def set_thumbnail(self, interaction: discord.Interaction, button: discord.ui.Button):
-        modal = URLModal("Thumbnail URL", "thumbnail_url", self)
-        await interaction.response.send_modal(modal)
-
-    @discord.ui.button(label="Add Field", style=discord.ButtonStyle.success, emoji="➕", row=2)
-    async def add_field(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if len(self.embed_data["fields"]) >= 25:
-            await interaction.response.send_message("❌ Maximum 25 fields allowed.", ephemeral=True)
-            return
-        modal = AddFieldModal(self)
-        await interaction.response.send_modal(modal)
-
-    @discord.ui.button(label="Remove Field", style=discord.ButtonStyle.danger, emoji="➖", row=3)
-    async def remove_field(self, interaction: discord.Interaction, button: discord.ui.Button):
-        if not self.embed_data["fields"]:
-            await interaction.response.send_message("No fields to remove.", ephemeral=True)
-            return
-        view = RemoveFieldView(self.bot, self.guild_id, self)
-        await interaction.response.edit_message(content="Select a field to remove:", view=view)
-        view.message = await interaction.original_response()
-
-    @discord.ui.button(label="Preview", style=discord.ButtonStyle.secondary, emoji="👁️", row=3)
-    async def preview(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = self.build_embed()
-
-        # If the embed has absolutely no content (title, description, fields, images, etc.)
-        # show a friendly warning instead of sending an empty embed that Discord would reject.
-        has_content = (
-            self.embed_data["title"] or self.embed_data["description"]
-            or self.embed_data["fields"] or self.embed_data["author_name"]
-            or self.embed_data["footer_text"] or self._file_path
-            or self.embed_data["image_url"] or self.embed_data["thumbnail_url"]
-        )
-        if not has_content:
-            await interaction.response.send_message(
-                "⚠️ Your embed is empty. Add some content before previewing.",
-                ephemeral=True
-            )
+        # If embed is empty, show error
+        if not embed.title and not embed.description and not embed.fields and not embed.author and not embed.footer:
+            await interaction.response.send_message("❌ Embed is empty. Add at least a title, description, or field.", ephemeral=True)
             return
 
-        if self._file_path:
-            embed.description = (embed.description or "") + "\n\n🖼️ *Local image file will be attached on send.*"
-
-        await interaction.response.send_message(embed=embed, ephemeral=True)
-
-    @discord.ui.button(label="Send", style=discord.ButtonStyle.success, emoji="📨", row=3)
-    async def send_embed(self, interaction: discord.Interaction, button: discord.ui.Button):
-        embed = self.build_embed()
-        view = SendChannelView(self.bot, self.guild_id, embed, self._file_path, parent_view=self)
+        # Now ask which channel to send to
+        view = SendChannelView(self.bot, self.guild_id, embed, parent_view=None)
         await interaction.response.edit_message(content="Select a channel to send the embed:", view=view)
         view.message = await interaction.original_response()
 
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.danger, row=3)
-    async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
-        view = MainMenu(self.bot, self.guild_id)
-        await interaction.response.edit_message(content="**Admin Panel**", view=view)
-        view.message = await interaction.original_response()
-
-# ──────────────── File Select (local images) ────────────────
-class FileSelectView(BaseConfigView):
-    def __init__(self, bot, guild_id, parent_builder):
-        super().__init__(bot, guild_id, timeout=120)
-        self.parent_builder = parent_builder
-        self.image_dir = os.path.join(os.path.dirname(__file__), '..', 'images')
-        options = self._get_file_options()
-        if not options:
-            options = [discord.SelectOption(label="❌ No images found", value="0")]
-        self.select_menu.options = options
-
-    def _get_file_options(self):
-        if not os.path.isdir(self.image_dir):
-            return []
-        valid_extensions = ('.png', '.jpg', '.jpeg', '.gif', '.webp')
-        options = []
-        for f in sorted(os.listdir(self.image_dir)):
-            if f.lower().endswith(valid_extensions):
-                options.append(discord.SelectOption(label=f, value=f))
-        return options[:25]
-
-    @discord.ui.select(placeholder="Choose an image file...")
-    async def select_menu(self, interaction: discord.Interaction, select: discord.ui.Select):
-        if select.values[0] == "0":
-            await interaction.response.send_message("❌ No image files found in the images folder.", ephemeral=True)
-            return
-        filename = select.values[0]
-        file_path = os.path.join(self.image_dir, filename)
-        self.parent_builder._file_path = file_path
-        self.parent_builder.embed_data["image_url"] = None
-        await interaction.response.edit_message(
-            content=f"✅ Image file set to **{filename}**",
-            view=self.parent_builder
-        )
-        self.parent_builder.message = await interaction.original_response()
-
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.danger)
-    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.edit_message(content="**Embed Builder**", view=self.parent_builder)
-        self.parent_builder.message = await interaction.original_response()
-
-# ──────────────── Send Channel Selector ────────────────
+# ──────────────── Send Channel Selector (unchanged) ────────────────
 class SendChannelView(BaseConfigView):
     def __init__(self, bot, guild_id, embed, file_path=None, parent_view=None):
         super().__init__(bot, guild_id, timeout=120)
@@ -754,14 +650,8 @@ class SendChannelView(BaseConfigView):
             await interaction.response.send_message("❌ Channel not found.", ephemeral=True)
             return
 
-        file = None
-        if self.file_path:
-            filename = os.path.basename(self.file_path)
-            file = discord.File(self.file_path, filename=filename)
-            self.embed.set_image(url=f"attachment://{filename}")
-
         try:
-            await channel.send(embed=self.embed, file=file)
+            await channel.send(embed=self.embed)
         except discord.Forbidden:
             await interaction.response.send_message(f"❌ Missing permissions in {channel.mention}.", ephemeral=True)
             return
@@ -786,220 +676,7 @@ class SendChannelView(BaseConfigView):
         else:
             await interaction.response.edit_message(content="Cancelled.", view=None)
 
-# ──────────────── Remove Field Selector ────────────────
-class RemoveFieldView(BaseConfigView):
-    def __init__(self, bot, guild_id, parent_builder):
-        super().__init__(bot, guild_id, timeout=120)
-        self.parent_builder = parent_builder
-        self.options = [
-            discord.SelectOption(
-                label=f"{f['name'][:80]}",
-                value=str(i),
-                description=f"Value: {f['value'][:50]}"
-            )
-            for i, f in enumerate(parent_builder.embed_data["fields"])
-        ]
-        if not self.options:
-            self.options = [discord.SelectOption(label="No fields", value="-1")]
-        self.select_menu.options = self.options
-
-    @discord.ui.select(placeholder="Select a field to remove...")
-    async def select_menu(self, interaction: discord.Interaction, select: discord.ui.Select):
-        idx = int(select.values[0])
-        if idx == -1:
-            await interaction.response.edit_message(content="No fields to remove.", view=self.parent_builder)
-            self.parent_builder.message = await interaction.original_response()
-            return
-        removed = self.parent_builder.embed_data["fields"].pop(idx)
-        await interaction.response.edit_message(
-            content=f"🗑️ Removed field: **{removed['name']}**",
-            view=self.parent_builder
-        )
-        self.parent_builder.message = await interaction.original_response()
-
-    @discord.ui.button(label="Back", style=discord.ButtonStyle.danger)
-    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.edit_message(content="**Embed Builder**", view=self.parent_builder)
-        self.parent_builder.message = await interaction.original_response()
-
-# ──────────────── Embed Builder Modals ────────────────
-class SetTextModal(discord.ui.Modal):
-    def __init__(self, field_name: str, data_key: str, builder_view, long=False):
-        super().__init__(title=f"Set {field_name}")
-        self.data_key = data_key
-        self.builder = builder_view
-        self.add_item(
-            discord.ui.TextInput(
-                label=field_name,
-                style=discord.TextStyle.long if long else discord.TextStyle.short,
-                placeholder=f"Enter {field_name.lower()}",
-                default=builder_view.embed_data[data_key] or "",
-                required=False,
-                max_length=256 if data_key == "title" else 2048
-            )
-        )
-
-    async def on_submit(self, interaction: discord.Interaction):
-        value = self.children[0].value.strip() or None
-        self.builder.embed_data[self.data_key] = value
-        await interaction.response.edit_message(
-            content=f"✅ {self.data_key.replace('_', ' ').title()} updated.",
-            view=self.builder
-        )
-        self.builder.message = await interaction.original_response()
-
-class SetColorModal(discord.ui.Modal, title="Set Color"):
-    def __init__(self, builder_view):
-        super().__init__()
-        self.builder = builder_view
-        current_hex = format(builder_view.embed_data["color"], '06x')
-        self.add_item(
-            discord.ui.TextInput(
-                label="Hex color",
-                placeholder="dc2626",
-                default=current_hex,
-                max_length=7
-            )
-        )
-
-    async def on_submit(self, interaction: discord.Interaction):
-        raw = self.children[0].value.strip().lstrip('#')
-        if not re.match(r'^[0-9a-fA-F]{6}$', raw):
-            await interaction.response.send_message("❌ Invalid hex color.", ephemeral=True)
-            return
-        self.builder.embed_data["color"] = int(raw, 16)
-        await interaction.response.edit_message(
-            content=f"✅ Color set to #{raw}",
-            view=self.builder
-        )
-        self.builder.message = await interaction.original_response()
-
-class AuthorModal(discord.ui.Modal, title="Set Author"):
-    def __init__(self, builder_view):
-        super().__init__()
-        self.builder = builder_view
-        self.add_item(
-            discord.ui.TextInput(
-                label="Author name",
-                placeholder="Your name",
-                default=builder_view.embed_data["author_name"] or "",
-                required=False,
-                max_length=256
-            )
-        )
-        self.add_item(
-            discord.ui.TextInput(
-                label="Author icon URL (optional)",
-                placeholder="https://...",
-                default=builder_view.embed_data["author_icon_url"] or "",
-                required=False
-            )
-        )
-
-    async def on_submit(self, interaction: discord.Interaction):
-        name = self.children[0].value.strip() or None
-        icon = self.children[1].value.strip() or None
-        self.builder.embed_data["author_name"] = name
-        self.builder.embed_data["author_icon_url"] = icon
-        await interaction.response.edit_message(
-            content="✅ Author updated.",
-            view=self.builder
-        )
-        self.builder.message = await interaction.original_response()
-
-class FooterModal(discord.ui.Modal, title="Set Footer"):
-    def __init__(self, builder_view):
-        super().__init__()
-        self.builder = builder_view
-        self.add_item(
-            discord.ui.TextInput(
-                label="Footer text",
-                placeholder="Footer",
-                default=builder_view.embed_data["footer_text"] or "",
-                required=False,
-                max_length=2048
-            )
-        )
-        self.add_item(
-            discord.ui.TextInput(
-                label="Footer icon URL (optional)",
-                placeholder="https://...",
-                default=builder_view.embed_data["footer_icon_url"] or "",
-                required=False
-            )
-        )
-
-    async def on_submit(self, interaction: discord.Interaction):
-        text = self.children[0].value.strip() or None
-        icon = self.children[1].value.strip() or None
-        self.builder.embed_data["footer_text"] = text
-        self.builder.embed_data["footer_icon_url"] = icon
-        await interaction.response.edit_message(
-            content="✅ Footer updated.",
-            view=self.builder
-        )
-        self.builder.message = await interaction.original_response()
-
-class URLModal(discord.ui.Modal):
-    def __init__(self, field_name: str, data_key: str, builder_view):
-        super().__init__(title=f"Set {field_name}")
-        self.data_key = data_key
-        self.builder = builder_view
-        self.add_item(
-            discord.ui.TextInput(
-                label=field_name,
-                placeholder="https://example.com/image.png",
-                default=builder_view.embed_data[data_key] or "",
-                required=False
-            )
-        )
-
-    async def on_submit(self, interaction: discord.Interaction):
-        url = self.children[0].value.strip() or None
-        if url and not url.startswith(("http://", "https://")):
-            await interaction.response.send_message("❌ URL must start with http:// or https://", ephemeral=True)
-            return
-        self.builder.embed_data[self.data_key] = url
-        await interaction.response.edit_message(
-            content=f"✅ {self.data_key.replace('_', ' ').title()} updated.",
-            view=self.builder
-        )
-        self.builder.message = await interaction.original_response()
-
-class AddFieldModal(discord.ui.Modal, title="Add Field"):
-    def __init__(self, builder_view):
-        super().__init__()
-        self.builder = builder_view
-        self.add_item(
-            discord.ui.TextInput(label="Field name", placeholder="Important", max_length=256)
-        )
-        self.add_item(
-            discord.ui.TextInput(label="Field value", placeholder="Value", style=discord.TextStyle.long, max_length=1024)
-        )
-        self.add_item(
-            discord.ui.TextInput(label="Inline (yes/no)", placeholder="yes", default="yes", required=False, max_length=3)
-        )
-
-    async def on_submit(self, interaction: discord.Interaction):
-        name = self.children[0].value.strip()
-        value = self.children[1].value.strip()
-        inline_str = self.children[2].value.strip().lower()
-        inline = inline_str != "no"
-        if not name or not value:
-            await interaction.response.send_message("❌ Name and value cannot be empty.", ephemeral=True)
-            return
-        self.builder.embed_data["fields"].append({
-            "name": name,
-            "value": value,
-            "inline": inline
-        })
-        await interaction.response.edit_message(
-            content=f"✅ Field added: **{name}**",
-            view=self.builder
-        )
-        self.builder.message = await interaction.original_response()
-
-# ──────────────── Custom Tips/Scenes Sub‑Menus ────────────────
+# ──────────────── Custom Tips/Scenes Sub‑Menus (unchanged) ────────────────
 class CustomTipsMenu(BaseConfigView):
     def __init__(self, bot, guild_id):
         super().__init__(bot, guild_id, timeout=300)
