@@ -141,8 +141,8 @@ class MainMenu(BaseConfigView):
 
     @discord.ui.button(label="Create Embed Post", style=discord.ButtonStyle.grey, emoji="📝")
     async def embed_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Open the single‑modal embed builder
-        modal = EmbedFormModal(self.bot, self.guild_id)
+        # Start the two‑modal wizard
+        modal = EmbedFirstModal(self.bot, self.guild_id)
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Manage Images", style=discord.ButtonStyle.grey, emoji="🖼️")
@@ -527,94 +527,151 @@ class AddWordModal(discord.ui.Modal, title="Add Profanity Word"):
         if view:
             view.message = await interaction.original_response()
 
-# ================= NEW SINGLE‑MODAL EMBED BUILDER =================
+# ================= NEW TWO‑MODAL + FIELDS VIEW EMBED BUILDER =================
 
-class EmbedFormModal(discord.ui.Modal, title="Create Embed"):
-    """One modal to rule them all – collects all embed fields in a single dialog."""
+class EmbedFirstModal(discord.ui.Modal, title="Step 1/2: Basic Info"):
     def __init__(self, bot, guild_id):
         super().__init__()
         self.bot = bot
         self.guild_id = guild_id
-
-        # Add all input fields
         self.add_item(discord.ui.TextInput(label="Title", required=False, max_length=256))
         self.add_item(discord.ui.TextInput(label="Description", style=discord.TextStyle.long, required=False, max_length=4096))
         self.add_item(discord.ui.TextInput(label="Color (hex, e.g. dc2626)", required=False, max_length=7))
+
+    async def on_submit(self, interaction: discord.Interaction):
+        embed_data = {
+            "title": self.children[0].value,
+            "description": self.children[1].value,
+            "color": self.children[2].value
+        }
+        modal = EmbedSecondModal(self.bot, self.guild_id, embed_data)
+        await interaction.response.send_modal(modal)
+
+class EmbedSecondModal(discord.ui.Modal, title="Step 2/2: Appearance & Images"):
+    def __init__(self, bot, guild_id, embed_data):
+        super().__init__()
+        self.bot = bot
+        self.guild_id = guild_id
+        self.embed_data = embed_data
         self.add_item(discord.ui.TextInput(label="Author name", required=False, max_length=256))
         self.add_item(discord.ui.TextInput(label="Author icon URL", required=False))
         self.add_item(discord.ui.TextInput(label="Footer text", required=False, max_length=2048))
         self.add_item(discord.ui.TextInput(label="Footer icon URL", required=False))
         self.add_item(discord.ui.TextInput(label="Image URL", required=False))
         self.add_item(discord.ui.TextInput(label="Thumbnail URL", required=False))
-        self.add_item(discord.ui.TextInput(
-            label="Fields (JSON array)",
-            style=discord.TextStyle.long,
-            required=False,
-            placeholder='[{"name":"Field1","value":"Value1","inline":true}]'
-        ))
 
     async def on_submit(self, interaction: discord.Interaction):
-        # Build embed from modal inputs
         embed = discord.Embed()
 
-        # Title
-        if self.children[0].value:
-            embed.title = self.children[0].value
-
-        # Description
-        if self.children[1].value:
-            embed.description = self.children[1].value
-
-        # Color
-        if self.children[2].value:
+        if self.embed_data.get("title"):
+            embed.title = self.embed_data["title"]
+        if self.embed_data.get("description"):
+            embed.description = self.embed_data["description"]
+        if self.embed_data.get("color"):
             try:
-                color_hex = self.children[2].value.strip('#')
+                color_hex = self.embed_data["color"].strip('#')
                 embed.color = int(color_hex, 16)
-            except ValueError:
-                await interaction.response.send_message("❌ Invalid hex color. Use format like `dc2626`.", ephemeral=True)
-                return
+            except:
+                pass
 
-        # Author
-        if self.children[3].value:
-            embed.set_author(name=self.children[3].value, icon_url=self.children[4].value or None)
-
-        # Footer
+        if self.children[0].value:
+            embed.set_author(name=self.children[0].value, icon_url=self.children[1].value or None)
+        if self.children[2].value:
+            embed.set_footer(text=self.children[2].value, icon_url=self.children[3].value or None)
+        if self.children[4].value:
+            embed.set_image(url=self.children[4].value)
         if self.children[5].value:
-            embed.set_footer(text=self.children[5].value, icon_url=self.children[6].value or None)
+            embed.set_thumbnail(url=self.children[5].value)
 
-        # Image URL
-        if self.children[7].value:
-            embed.set_image(url=self.children[7].value)
+        view = EmbedFieldsView(self.bot, self.guild_id, embed)
+        await interaction.response.edit_message(content="**Embed Builder – Fields & Send**\nUse the buttons below to add fields, then click Send.", view=view)
+        view.message = await interaction.original_response()
 
-        # Thumbnail URL
-        if self.children[8].value:
-            embed.set_thumbnail(url=self.children[8].value)
+class EmbedFieldsView(BaseConfigView):
+    def __init__(self, bot, guild_id, embed):
+        super().__init__(bot, guild_id, timeout=600)
+        self.embed = embed
+        self.fields = []
 
-        # Fields (JSON)
-        if self.children[9].value:
-            try:
-                fields = json.loads(self.children[9].value)
-                if not isinstance(fields, list):
-                    raise ValueError("Fields must be a JSON array")
-                for f in fields:
-                    embed.add_field(
-                        name=f.get('name', 'Untitled'),
-                        value=f.get('value', ''),
-                        inline=f.get('inline', True)
-                    )
-            except Exception as e:
-                await interaction.response.send_message(f"❌ Invalid JSON in Fields: {e}", ephemeral=True)
-                return
-
-        # If embed is empty, show error
-        if not embed.title and not embed.description and not embed.fields and not embed.author and not embed.footer:
-            await interaction.response.send_message("❌ Embed is empty. Add at least a title, description, or field.", ephemeral=True)
+    @discord.ui.button(label="Add Field", style=discord.ButtonStyle.success, emoji="➕")
+    async def add_field(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if len(self.fields) >= 25:
+            await interaction.response.send_message("❌ Maximum 25 fields allowed.", ephemeral=True)
             return
+        modal = AddFieldModal(self)
+        await interaction.response.send_modal(modal)
 
-        # Now ask which channel to send to
-        view = SendChannelView(self.bot, self.guild_id, embed, parent_view=None)
+    @discord.ui.button(label="Remove Field", style=discord.ButtonStyle.danger, emoji="➖")
+    async def remove_field(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if not self.fields:
+            await interaction.response.send_message("No fields to remove.", ephemeral=True)
+            return
+        view = RemoveFieldView(self.bot, self.guild_id, self.fields, parent_view=self)
+        await interaction.response.edit_message(content="Select a field to remove:", view=view)
+        view.message = await interaction.original_response()
+
+    @discord.ui.button(label="Preview", style=discord.ButtonStyle.secondary, emoji="👁️")
+    async def preview(self, interaction: discord.Interaction, button: discord.ui.Button):
+        temp_embed = self.embed.copy()
+        for f in self.fields:
+            temp_embed.add_field(name=f['name'], value=f['value'], inline=f.get('inline', True))
+        if not temp_embed.title and not temp_embed.description and not temp_embed.fields:
+            await interaction.response.send_message("⚠️ Embed is empty. Add a title, description, or fields first.", ephemeral=True)
+            return
+        await interaction.response.send_message(embed=temp_embed, ephemeral=True)
+
+    @discord.ui.button(label="Send", style=discord.ButtonStyle.success, emoji="📨")
+    async def send_embed(self, interaction: discord.Interaction, button: discord.ui.Button):
+        for f in self.fields:
+            self.embed.add_field(name=f['name'], value=f['value'], inline=f.get('inline', True))
+        view = SendChannelView(self.bot, self.guild_id, self.embed, parent_view=self)
         await interaction.response.edit_message(content="Select a channel to send the embed:", view=view)
         view.message = await interaction.original_response()
+
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.danger)
+    async def back(self, interaction: discord.Interaction, button: discord.ui.Button):
+        view = MainMenu(self.bot, self.guild_id)
+        await interaction.response.edit_message(content="**Admin Panel**", view=view)
+        view.message = await interaction.original_response()
+
+class AddFieldModal(discord.ui.Modal, title="Add Field"):
+    def __init__(self, parent_view):
+        super().__init__()
+        self.parent_view = parent_view
+        self.add_item(discord.ui.TextInput(label="Field name", max_length=256))
+        self.add_item(discord.ui.TextInput(label="Field value", style=discord.TextStyle.long, max_length=1024))
+        self.add_item(discord.ui.TextInput(label="Inline (yes/no)", placeholder="yes", default="yes", max_length=3))
+
+    async def on_submit(self, interaction: discord.Interaction):
+        name = self.children[0].value.strip()
+        value = self.children[1].value.strip()
+        inline = self.children[2].value.strip().lower() != "no"
+        if not name or not value:
+            await interaction.response.send_message("❌ Name and value cannot be empty.", ephemeral=True)
+            return
+        self.parent_view.fields.append({"name": name, "value": value, "inline": inline})
+        await interaction.response.edit_message(content=f"✅ Field added: **{name}**", view=self.parent_view)
+        self.parent_view.message = await interaction.original_response()
+
+class RemoveFieldView(BaseConfigView):
+    def __init__(self, bot, guild_id, fields, parent_view):
+        super().__init__(bot, guild_id, timeout=120)
+        self.fields = fields
+        self.parent_view = parent_view
+        options = [discord.SelectOption(label=f"{f['name'][:80]}", value=str(i)) for i, f in enumerate(fields)]
+        self.select_menu.options = options
+
+    @discord.ui.select(placeholder="Select a field to remove...")
+    async def select_menu(self, interaction: discord.Interaction, select: discord.ui.Select):
+        idx = int(select.values[0])
+        removed = self.fields.pop(idx)
+        await interaction.response.edit_message(content=f"🗑️ Removed field: **{removed['name']}**", view=self.parent_view)
+        self.parent_view.message = await interaction.original_response()
+
+    @discord.ui.button(label="Back", style=discord.ButtonStyle.danger)
+    async def back_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.edit_message(view=self.parent_view)
+        self.parent_view.message = await interaction.original_response()
 
 # ──────────────── Send Channel Selector (unchanged) ────────────────
 class SendChannelView(BaseConfigView):
