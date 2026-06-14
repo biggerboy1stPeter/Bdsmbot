@@ -50,7 +50,6 @@ class AdminPanel(commands.Cog):
         """Save an uploaded image to the bot's images/ folder."""
         await interaction.response.defer(ephemeral=True)
 
-        # 1. Validate file type
         valid_extensions = ('.png', '.jpg', '.jpeg', '.gif', '.webp')
         if not file.filename.lower().endswith(valid_extensions):
             await interaction.followup.send(
@@ -59,11 +58,9 @@ class AdminPanel(commands.Cog):
             )
             return
 
-        # 2. Determine where to save
         image_dir = os.path.join(os.path.dirname(__file__), '..', 'images')
         os.makedirs(image_dir, exist_ok=True)
 
-        # 3. Build a safe filename
         if filename:
             safe_name = re.sub(r'[^\w\-]', '_', filename.strip())
             if not safe_name:
@@ -83,7 +80,6 @@ class AdminPanel(commands.Cog):
             final_path = os.path.join(image_dir, final_name)
             counter += 1
 
-        # 4. Download and save
         try:
             await file.save(final_path)
             await interaction.followup.send(
@@ -141,8 +137,8 @@ class MainMenu(BaseConfigView):
 
     @discord.ui.button(label="Create Embed Post", style=discord.ButtonStyle.grey, emoji="📝")
     async def embed_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Start the two‑modal wizard
-        modal = EmbedFirstModal(self.bot, self.guild_id)
+        # Start three‑step wizard
+        modal = EmbedStepOne(self.bot, self.guild_id)
         await interaction.response.send_modal(modal)
 
     @discord.ui.button(label="Manage Images", style=discord.ButtonStyle.grey, emoji="🖼️")
@@ -166,7 +162,7 @@ class ImageManagerView(BaseConfigView):
         options = self._get_file_options()
         if not options:
             options = [discord.SelectOption(label="❌ No images", value="0")]
-        self.children[0].options = options  # the select menu is always the first child
+        self.children[0].options = options
 
     def _get_file_options(self):
         if not os.path.isdir(self.image_dir):
@@ -243,7 +239,7 @@ class ModerationMenu(BaseConfigView):
         await interaction.response.edit_message(content="**Admin Panel**", view=view)
         view.message = await interaction.original_response()
 
-# ------------------- Auto-Post Menu (Full Settings) -------------------
+# ------------------- Auto-Post Menu -------------------
 class AutoPostMenu(BaseConfigView):
     def __init__(self, bot, guild_id):
         super().__init__(bot, guild_id, timeout=600)
@@ -326,7 +322,6 @@ class AutoPostMenu(BaseConfigView):
         await interaction.response.edit_message(content="**Custom Scene Prompts**", view=view)
         view.message = await interaction.original_response()
 
-    # Fixed: row=4 instead of row=5
     @discord.ui.button(label="Test Daily Post", style=discord.ButtonStyle.gray, emoji="🚀", row=4)
     async def test_daily(self, interaction: discord.Interaction, button: discord.ui.Button):
         await self._test_post(interaction, "daily")
@@ -436,7 +431,6 @@ class ServerConfigMenu(BaseConfigView):
         await interaction.response.edit_message(content="Select a channel for moderation logs:", view=view)
         view.message = await interaction.original_response()
 
-    # ─── Welcome/Verification Settings ───
     @discord.ui.button(label="Welcome Channel", style=discord.ButtonStyle.success, emoji="#️⃣")
     async def welcome_channel(self, interaction: discord.Interaction, button: discord.ui.Button):
         view = ChannelSelectView(self.bot, self.guild_id, "welcome_channel_id", parent_menu=self)
@@ -461,7 +455,9 @@ class ServerConfigMenu(BaseConfigView):
         await interaction.response.edit_message(content="**Admin Panel**", view=view)
         view.message = await interaction.original_response()
 
-# ──────────────── Old Modals (still used) ────────────────
+# ---------------------------------------------------------------------
+# Old Modals (still used)
+# ---------------------------------------------------------------------
 class SetValueModal(discord.ui.Modal, title="Set Value"):
     def __init__(self, key, current_value, bot, guild_id, parent_view=None):
         super().__init__()
@@ -527,9 +523,9 @@ class AddWordModal(discord.ui.Modal, title="Add Profanity Word"):
         if view:
             view.message = await interaction.original_response()
 
-# ================= NEW TWO‑MODAL + FIELDS VIEW EMBED BUILDER =================
+# ================= THREE‑STEP EMBED BUILDER (≤5 fields each) =================
 
-class EmbedFirstModal(discord.ui.Modal, title="Step 1/2: Basic Info"):
+class EmbedStepOne(discord.ui.Modal, title="Step 1/3: Basic Info"):
     def __init__(self, bot, guild_id):
         super().__init__()
         self.bot = bot
@@ -544,10 +540,10 @@ class EmbedFirstModal(discord.ui.Modal, title="Step 1/2: Basic Info"):
             "description": self.children[1].value,
             "color": self.children[2].value
         }
-        modal = EmbedSecondModal(self.bot, self.guild_id, embed_data)
+        modal = EmbedStepTwo(self.bot, self.guild_id, embed_data)
         await interaction.response.send_modal(modal)
 
-class EmbedSecondModal(discord.ui.Modal, title="Step 2/2: Appearance & Images"):
+class EmbedStepTwo(discord.ui.Modal, title="Step 2/3: Author & Footer"):
     def __init__(self, bot, guild_id, embed_data):
         super().__init__()
         self.bot = bot
@@ -557,12 +553,30 @@ class EmbedSecondModal(discord.ui.Modal, title="Step 2/2: Appearance & Images"):
         self.add_item(discord.ui.TextInput(label="Author icon URL", required=False))
         self.add_item(discord.ui.TextInput(label="Footer text", required=False, max_length=2048))
         self.add_item(discord.ui.TextInput(label="Footer icon URL", required=False))
+
+    async def on_submit(self, interaction: discord.Interaction):
+        self.embed_data["author_name"] = self.children[0].value
+        self.embed_data["author_icon"] = self.children[1].value
+        self.embed_data["footer_text"] = self.children[2].value
+        self.embed_data["footer_icon"] = self.children[3].value
+        modal = EmbedStepThree(self.bot, self.guild_id, self.embed_data)
+        await interaction.response.send_modal(modal)
+
+class EmbedStepThree(discord.ui.Modal, title="Step 3/3: Images"):
+    def __init__(self, bot, guild_id, embed_data):
+        super().__init__()
+        self.bot = bot
+        self.guild_id = guild_id
+        self.embed_data = embed_data
         self.add_item(discord.ui.TextInput(label="Image URL", required=False))
         self.add_item(discord.ui.TextInput(label="Thumbnail URL", required=False))
 
     async def on_submit(self, interaction: discord.Interaction):
-        embed = discord.Embed()
+        self.embed_data["image_url"] = self.children[0].value
+        self.embed_data["thumbnail_url"] = self.children[1].value
 
+        # Build the embed from collected data
+        embed = discord.Embed()
         if self.embed_data.get("title"):
             embed.title = self.embed_data["title"]
         if self.embed_data.get("description"):
@@ -573,16 +587,16 @@ class EmbedSecondModal(discord.ui.Modal, title="Step 2/2: Appearance & Images"):
                 embed.color = int(color_hex, 16)
             except:
                 pass
+        if self.embed_data.get("author_name"):
+            embed.set_author(name=self.embed_data["author_name"], icon_url=self.embed_data.get("author_icon") or None)
+        if self.embed_data.get("footer_text"):
+            embed.set_footer(text=self.embed_data["footer_text"], icon_url=self.embed_data.get("footer_icon") or None)
+        if self.embed_data.get("image_url"):
+            embed.set_image(url=self.embed_data["image_url"])
+        if self.embed_data.get("thumbnail_url"):
+            embed.set_thumbnail(url=self.embed_data["thumbnail_url"])
 
-        if self.children[0].value:
-            embed.set_author(name=self.children[0].value, icon_url=self.children[1].value or None)
-        if self.children[2].value:
-            embed.set_footer(text=self.children[2].value, icon_url=self.children[3].value or None)
-        if self.children[4].value:
-            embed.set_image(url=self.children[4].value)
-        if self.children[5].value:
-            embed.set_thumbnail(url=self.children[5].value)
-
+        # Show fields & send view
         view = EmbedFieldsView(self.bot, self.guild_id, embed)
         await interaction.response.edit_message(content="**Embed Builder – Fields & Send**\nUse the buttons below to add fields, then click Send.", view=view)
         view.message = await interaction.original_response()
@@ -673,7 +687,7 @@ class RemoveFieldView(BaseConfigView):
         await interaction.response.edit_message(view=self.parent_view)
         self.parent_view.message = await interaction.original_response()
 
-# ──────────────── Send Channel Selector (unchanged) ────────────────
+# ------------------- Send Channel Selector -------------------
 class SendChannelView(BaseConfigView):
     def __init__(self, bot, guild_id, embed, file_path=None, parent_view=None):
         super().__init__(bot, guild_id, timeout=120)
@@ -733,7 +747,7 @@ class SendChannelView(BaseConfigView):
         else:
             await interaction.response.edit_message(content="Cancelled.", view=None)
 
-# ──────────────── Custom Tips/Scenes Sub‑Menus (unchanged) ────────────────
+# ------------------- Custom Tips/Scenes Sub‑Menus -------------------
 class CustomTipsMenu(BaseConfigView):
     def __init__(self, bot, guild_id):
         super().__init__(bot, guild_id, timeout=300)
@@ -885,7 +899,7 @@ class RemoveItemView(BaseConfigView):
         await interaction.response.edit_message(view=self.parent_menu)
         self.parent_menu.message = await interaction.original_response()
 
-# ──────────────── Time/Colour Modals for AutoPost ────────────────
+# ------------------- Time/Colour Modals for AutoPost -------------------
 class SetTimeModal(discord.ui.Modal, title="Set Time (UTC)"):
     def __init__(self, key, current_value, bot, guild_id, parent_view=None, weekly=False):
         super().__init__()
