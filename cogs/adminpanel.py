@@ -137,7 +137,7 @@ class MainMenu(BaseConfigView):
 
     @discord.ui.button(label="Create Embed Post", style=discord.ButtonStyle.grey, emoji="📝")
     async def embed_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Start three‑step wizard
+        # Start three‑step wizard – first modal
         modal = EmbedStepOne(self.bot, self.guild_id)
         await interaction.response.send_modal(modal)
 
@@ -523,7 +523,7 @@ class AddWordModal(discord.ui.Modal, title="Add Profanity Word"):
         if view:
             view.message = await interaction.original_response()
 
-# ================= THREE‑STEP EMBED BUILDER (≤5 fields each, max_length 4000) =================
+# ================= THREE‑STEP EMBED BUILDER WITH BUTTON BRIDGE =================
 
 class EmbedStepOne(discord.ui.Modal, title="Step 1/3: Basic Info"):
     def __init__(self, bot, guild_id):
@@ -531,18 +531,48 @@ class EmbedStepOne(discord.ui.Modal, title="Step 1/3: Basic Info"):
         self.bot = bot
         self.guild_id = guild_id
         self.add_item(discord.ui.TextInput(label="Title", required=False, max_length=256))
-        # Fixed: max_length changed from 4096 to 4000 (Discord modal limit)
         self.add_item(discord.ui.TextInput(label="Description", style=discord.TextStyle.long, required=False, max_length=4000))
         self.add_item(discord.ui.TextInput(label="Color (hex, e.g. dc2626)", required=False, max_length=7))
 
     async def on_submit(self, interaction: discord.Interaction):
-        embed_data = {
+        # Store temporary data
+        if not hasattr(self.bot, 'temp_embed_data'):
+            self.bot.temp_embed_data = {}
+        self.bot.temp_embed_data[interaction.user.id] = {
             "title": self.children[0].value,
             "description": self.children[1].value,
             "color": self.children[2].value
         }
+        # Show a button to continue
+        view = ContinueToStepTwo(self.bot, self.guild_id, interaction.user.id)
+        await interaction.response.edit_message(content="✅ Basic info saved. Click below to continue.", view=view)
+
+class ContinueToStepTwo(discord.ui.View):
+    def __init__(self, bot, guild_id, user_id):
+        super().__init__(timeout=300)
+        self.bot = bot
+        self.guild_id = guild_id
+        self.user_id = user_id
+        self.message = None
+
+    @discord.ui.button(label="Continue to Step 2 (Author & Footer)", style=discord.ButtonStyle.primary)
+    async def continue_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user.id != self.user_id:
+            return await interaction.response.send_message("This panel is not for you.", ephemeral=True)
+        embed_data = self.bot.temp_embed_data.get(self.user_id, {})
         modal = EmbedStepTwo(self.bot, self.guild_id, embed_data)
         await interaction.response.send_modal(modal)
+        # Clean up temporary data after moving to step 2
+        del self.bot.temp_embed_data[self.user_id]
+
+    async def on_timeout(self):
+        for child in self.children:
+            child.disabled = True
+        if self.message:
+            try:
+                await self.message.edit(content="⏰ Time expired. Use `/admin` again.", view=None)
+            except:
+                pass
 
 class EmbedStepTwo(discord.ui.Modal, title="Step 2/3: Author & Footer"):
     def __init__(self, bot, guild_id, embed_data):
