@@ -523,7 +523,7 @@ class AddWordModal(discord.ui.Modal, title="Add Profanity Word"):
         if view:
             view.message = await interaction.original_response()
 
-# ================= THREE‑STEP EMBED BUILDER (≤5 fields each) =================
+# ================= THREE‑STEP EMBED BUILDER (≤5 fields each, max_length 4000) =================
 
 class EmbedStepOne(discord.ui.Modal, title="Step 1/3: Basic Info"):
     def __init__(self, bot, guild_id):
@@ -531,7 +531,8 @@ class EmbedStepOne(discord.ui.Modal, title="Step 1/3: Basic Info"):
         self.bot = bot
         self.guild_id = guild_id
         self.add_item(discord.ui.TextInput(label="Title", required=False, max_length=256))
-        self.add_item(discord.ui.TextInput(label="Description", style=discord.TextStyle.long, required=False, max_length=4096))
+        # Fixed: max_length changed from 4096 to 4000 (Discord modal limit)
+        self.add_item(discord.ui.TextInput(label="Description", style=discord.TextStyle.long, required=False, max_length=4000))
         self.add_item(discord.ui.TextInput(label="Color (hex, e.g. dc2626)", required=False, max_length=7))
 
     async def on_submit(self, interaction: discord.Interaction):
